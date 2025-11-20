@@ -115,6 +115,25 @@ def extract_email_from_user_agent(user_agent):
     emails = email_pattern.findall(user_agent)
     return emails[0] if emails else "メールアドレスが見つかりません"
 
+# --- APIエンドポイントの追加 ---
+
+@app.route("/api/auth", methods=["GET"])
+def api_auth():
+    # ここでは、ユーザーがAPIにアクセスした際のIPアドレスとメールアドレスを抽出します
+    user_ip = request.remote_addr
+    user_agent = request.headers.get('User-Agent')
+
+    # ユーザーエージェントからメールアドレスを抽出（例として、ユーザーエージェントにメールアドレスが含まれている場合）
+    email = extract_email_from_user_agent(user_agent)
+
+    # 返却データの準備
+    response_data = {
+        "ip_address": user_ip,
+        "email": email
+    }
+
+    return jsonify(response_data), 200
+
 # --- メイン実行 ---
 
 bot_thread = threading.Thread(target=start_bot)
