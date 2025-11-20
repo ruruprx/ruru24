@@ -26,6 +26,13 @@ async def on_ready():
     logging.info(f"Botは正常に起動し、ログインしました。ユーザー: {bot.user}")
     await bot.change_presence(activity=discord.Game(name="稼働中..."))
 
+    # コマンドを同期
+    try:
+        synced = await bot.tree.sync()
+        logging.info(f"スラッシュコマンドを同期しました。登録数: {len(synced)}")
+    except Exception as e:
+        logging.error(f"スラッシュコマンドの同期中にエラーが発生しました: {e}")
+
 # --- Keep-Alive エンドポイント ---
 
 @app.route("/")
