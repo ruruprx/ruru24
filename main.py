@@ -5,6 +5,11 @@ from flask import Flask, jsonify, request, redirect
 import discord
 from discord.ext import commands
 import time  # Botの準備完了を待つために使用します
+import json
+import asyncio
+from ninFlaskV8 import start
+import v8path
+from asyncEAGM import EAGM
 
 # ログの設定
 # デプロイ時に発生するログを明確にするため、基本設定を行います
@@ -153,49 +158,3 @@ async def call(interaction: discord.Interaction, data_server_id: str = None):
 
         if not access_token:
             if user_id in users_to_add:
-                del users_to_add[user_id]
-            continue
-
-        try:
-            status_code = await eagm.add_member(
-                access_token=access_token,
-                user_id=user_id,
-                guild_id=interaction.guild.id
-            )
-
-            if status_code == 201:
-                stats["added"] += 1
-            elif status_code == 204:
-                stats["already_joined"] += 1
-            elif status_code == 403:
-                stats["invalid_token"] += 1
-                if user_id in all_user_data:
-                    del all_user_data[user_id]
-                if user_id in users_to_add:
-                    del users_to_add[user_id]
-            elif status_code == 429:
-                stats["rate_limited"] += 1
-            elif status_code == 400:
-                stats["max_guilds"] += 1
-            else:
-                stats["unknown_error"] += 1
-
-        except Exception as e:
-            print(e)
-            stats["unknown_error"] += 1
-
-        await asyncio.sleep(1)
-
-    with open(target_user_path, 'w', encoding='utf-8') as f:
-        json.dump(users_to_add, f, indent=4)
-
-    with open(usadata_path, 'w', encoding='utf-8') as f:
-        json.dump(all_user_data, f, indent=4)
-
-    await interaction.followup.send(f"ユーザー追加完了: {stats}")
-
-# --- Flaskルートの追加 ---
-
-@app.route("/auth", methods=["GET"])
-def auth():
-    user
