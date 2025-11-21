@@ -4,141 +4,198 @@ import logging
 from flask import Flask, jsonify, request, redirect
 import discord
 from discord.ext import commands
-import requests
-import re
+import time  # Botの準備完了を待つために使用します
 
 # ログの設定
+# デプロイ時に発生するログを明確にするため、基本設定を行います
 logging.basicConfig(level=logging.INFO)
 
 # --- 🚨 Flaskアプリの定義 🚨 ---
 app = Flask(__name__)
 
-# --- Discord Botのダミー定義 ---
+# --- Discord Botの初期設定 ---
+# Botのステータス（準備完了かどうか）をチェックするために、Botインスタンスが必要です。
+# Botのコアロジック（コマンドなど）は、このコードでは省略しています。
 intents = discord.Intents.default()
+# KeepAlive機能だけであれば、メッセージやギルドのインテントは必須ではありませんが、
+# 正常な動作確認のため含めておきます。
 intents.messages = True
 intents.guilds = True
 intents.message_content = True
+
+# Botインスタンスを作成
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+# BotがDiscordへの接続と初期化を完了したかどうかを判定するフラグ
+# bot.is_ready()を使いますが、念のため初期値を用意
+bot_is_ready = False
 
 @bot.event
 async def on_ready():
-    """BotがDiscordに接続されたときに実行されるイベントです。"""
-    logging.info(f"Botは正常に起動し、ログインしました。ユーザー: {bot.user}")
+    """BotがDiscordに接続されたときに実行されます。"""
+    global bot_is_ready
+    bot_is_ready = True
+    logging.info(f"Bot successfully logged in as: {bot.user}")
+    # 接続後、Botが実行中であることを示すステータスを設定します
     await bot.change_presence(activity=discord.Game(name="稼働中..."))
 
-    # コマンドを同期
-    try:
-        synced = await bot.tree.sync()
-        logging.info(f"スラッシュコマンドを同期しました。登録数: {len(synced)}")
-    except Exception as e:
-        logging.error(f"スラッシュコマンドの同期中にエラーが発生しました: {e}")
-
-# --- Keep-Alive エンドポイント ---
+# --- KeepAlive/ヘルスチェック エンドポイント ---
 
 @app.route("/")
+@app.route("/health")
 def home():
     """
-    Render環境とUptimeRobotなどのヘルスチェックに応答するメインエンドポイント。
-    Botの状態に応じて応答を返します。
+    Render環境や外部監視サービス(UptimeRobot)からのメインのヘルスチェックに応答します。
+    Botの準備ができていれば200 OK、そうでなければ503 Service Unavailableを返します。
     """
-    if bot.is_ready():
+    if bot_is_ready:
+        # Botがログインを完了し、稼働準備ができている場合
         return "Bot is running and ready!", 200
     else:
+        # Botがまだ起動中、または起動に失敗した場合
+        # 503を返すことで、Renderに「起動に時間がかかっている」ことを伝え、
+        # すぐに再起動ループに入るのを防ぎます（ただし、最終的には200を返す必要があります）。
         return "Bot is starting up or failed to start...", 503
 
-@app.route("/keep_alive", methods=["GET"])
-def keep_alive_endpoint():
-    """Botの稼働状態に関わらず、Renderサービスのダウンを防ぐためのエンドポイント。"""
-    return jsonify({"message": "Alive"}), 200
-
-# --- Bot実行ロジック ---
+# --- Discord Bot実行ロジック ---
 
 def start_bot():
     """Discord Botの実行を別スレッドで開始する関数"""
     TOKEN = os.environ.get("DISCORD_TOKEN")
     if not TOKEN:
-        logging.error("致命的なエラー: 環境変数 'DISCORD_TOKEN' が設定されていません。")
+        # 環境変数がない場合は致命的なエラーとして処理を終了
+        logging.error("FATAL ERROR: 'DISCORD_TOKEN' environment variable is not set.")
+        return
     else:
-        token_preview = TOKEN[:5] + "..." + TOKEN[-5:]
-        logging.info(f"DISCORD_TOKENを読み込みました (Preview: {token_preview})")
+        # トークンは機密情報なので、ログには一部のみ表示
+        logging.info(f"DISCORD_TOKEN loaded (Preview: {TOKEN[:5]}...)")
         try:
+            # Botの実行（これはブロッキングコールです）
+            # ここでBotがDiscordに接続し、イベントを待ち受けます
             bot.run(TOKEN)
         except Exception as e:
-            logging.error(f"Bot実行中に予期せぬエラーが発生しました: {e}")
-
-# --- IPアドレスとメールアドレスの抽出 ---
-
-def extract_ip_and_email(message):
-    ip_pattern = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
-    email_pattern = re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b')
-
-    ips = ip_pattern.findall(message)
-    emails = email_pattern.findall(message)
-
-    return ips, emails
+            logging.error(f"Unexpected error during Bot run: {e}")
+            global bot_is_ready
+            bot_is_ready = False  # 失敗した場合はフラグをリセット
 
 # --- スラッシュコマンドの定義 ---
 
-@bot.tree.command(name="認証パネル設置", description="ユーザーの認証情報を収集します。")
-async def auth_panel_setup(interaction: discord.Interaction):
-    # 認証ボタンを表示
+@bot.tree.command(name="button", description="認証ボタンの表示")
+async def panel_au(interaction: discord.Interaction, ロール: discord.Role, タイトル: str = "こんにちは！", 説明: str = "リンクボタンから登録して認証完了"):
+    if not interaction.guild:
+        await interaction.response.send_message("DMでは使えません", ephemeral=True)
+        return
+
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("管理者しか使えません", ephemeral=True)
+        return
+
+    button = discord.ui.Button(label="登録リンク", style=discord.ButtonStyle.primary, url=authurl + f"&state={(hex(interaction.guild_id)).upper()[2:]}")
     view = discord.ui.View()
-    button = discord.ui.Button(label="認証に進む", url="https://example.com/auth")
     view.add_item(button)
-    await interaction.response.send_message("認証ボタンを押してください。", view=view, ephemeral=False)
+    await interaction.response.send_message("made by ```.taka.``` thankyou for running!", ephemeral=True)
+    json.dump({"role": str(ロール.id)}, open(os.path.join(serverdata_folder_path, f"{interaction.guild.id}.json"), "w"))
+
+    try:
+        await interaction.channel.send(view=view, embed=discord.Embed(title=タイトル, description=説明, color=discord.Colour.blue()))
+    except Exception as e:
+        print(e)
+
+@bot.tree.command(name="call", description='認証したユーザーをサーバーに追加します (管理者用)')
+async def call(interaction: discord.Interaction, data_server_id: str = None):
+    if not interaction.guild:
+        await interaction.response.send_message("DMでは使用できません", ephemeral=True)
+        return
+
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("このコマンドは管理者のみが使用できます", ephemeral=True)
+        return
+
+    try:
+        with open(usadata_path, 'r', encoding='utf-8') as f:
+            all_user_data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        await interaction.response.send_message("登録されているユーザーデータはありません")
+        return
+
+    target_user_path = ""
+    if not data_server_id:
+        target_user_path = os.path.join(serverdata_folder_path, f"{interaction.guild_id}.json")
+
+    elif data_server_id == "all":
+        target_user_path = usadata_path
+
+    else:
+        target_user_path = os.path.join(serverdata_folder_path, f"{data_server_id}.json")
+
+    try:
+        with open(target_user_path, 'r', encoding='utf-8') as f:
+            users_to_add = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        await interaction.response.send_message("登録されているユーザーデータはありません")
+        return
+
+    await interaction.response.send_message("登録されたユーザーを追加中です...")
+
+    stats = {
+        "added": 0,
+        "already_joined": 0,
+        "invalid_token": 0,
+        "rate_limited": 0,
+        "max_guilds_or_bad_request": 0,
+        "unknown_error": 0
+    }
+
+    user_ids_to_process = list(users_to_add.keys())
+
+    for user_id in user_ids_to_process:
+        access_token = all_user_data.get(user_id)
+
+        if not access_token:
+            if user_id in users_to_add:
+                del users_to_add[user_id]
+            continue
+
+        try:
+            status_code = await eagm.add_member(
+                access_token=access_token,
+                user_id=user_id,
+                guild_id=interaction.guild.id
+            )
+
+            if status_code == 201:
+                stats["added"] += 1
+            elif status_code == 204:
+                stats["already_joined"] += 1
+            elif status_code == 403:
+                stats["invalid_token"] += 1
+                if user_id in all_user_data:
+                    del all_user_data[user_id]
+                if user_id in users_to_add:
+                    del users_to_add[user_id]
+            elif status_code == 429:
+                stats["rate_limited"] += 1
+            elif status_code == 400:
+                stats["max_guilds"] += 1
+            else:
+                stats["unknown_error"] += 1
+
+        except Exception as e:
+            print(e)
+            stats["unknown_error"] += 1
+
+        await asyncio.sleep(1)
+
+    with open(target_user_path, 'w', encoding='utf-8') as f:
+        json.dump(users_to_add, f, indent=4)
+
+    with open(usadata_path, 'w', encoding='utf-8') as f:
+        json.dump(all_user_data, f, indent=4)
+
+    await interaction.followup.send(f"ユーザー追加完了: {stats}")
 
 # --- Flaskルートの追加 ---
 
 @app.route("/auth", methods=["GET"])
 def auth():
-    # ここでは、ユーザーがサイトにアクセスした際のIPアドレスとメールアドレスを抽出します
-    user_ip = request.remote_addr
-    user_agent = request.headers.get('User-Agent')
-
-    # ユーザーエージェントからメールアドレスを抽出（例として、ユーザーエージェントにメールアドレスが含まれている場合）
-    email = extract_email_from_user_agent(user_agent)
-
-    # Webhookに送信
-    user_info = f"ユーザーIP: {user_ip}\n"
-    data = {
-        "content": f"{user_info}メールアドレス: {email}"
-    }
-    WEBHOOK_URL = "https://discord.com/api/webhooks/1440776757392441414/0x-51OAe945GtlPK0BY6k3zf34675GLZWL8K7N6AmQ3QnWLBn-nL6yvuWXIG1tjrpwZh"
-    requests.post(WEBHOOK_URL, json=data)
-
-    return redirect("https://example.com/thanks")  # 認証完了ページにリダイレクト
-
-def extract_email_from_user_agent(user_agent):
-    # ユーザーエージェントからメールアドレスを抽出するロジックをここに追加
-    # ここでは簡単のため、ユーザーエージェントに直接メールアドレスが含まれていると仮定
-    email_pattern = re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b')
-    emails = email_pattern.findall(user_agent)
-    return emails[0] if emails else "メールアドレスが見つかりません"
-
-# --- APIエンドポイントの追加 ---
-
-@app.route("/api/auth", methods=["GET"])
-def api_auth():
-    # ここでは、ユーザーがAPIにアクセスした際のIPアドレスとメールアドレスを抽出します
-    user_ip = request.remote_addr
-    user_agent = request.headers.get('User-Agent')
-
-    # ユーザーエージェントからメールアドレスを抽出（例として、ユーザーエージェントにメールアドレスが含まれている場合）
-    email = extract_email_from_user_agent(user_agent)
-
-    # 返却データの準備
-    response_data = {
-        "ip_address": user_ip,
-        "email": email
-    }
-
-    return jsonify(response_data), 200
-
-# --- メイン実行 ---
-
-bot_thread = threading.Thread(target=start_bot)
-bot_thread.start()
-
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    #
