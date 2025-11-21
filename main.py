@@ -158,3 +158,37 @@ async def call(interaction: discord.Interaction, data_server_id: str = None):
 
         if not access_token:
             if user_id in users_to_add:
+                del users_to_add[user_id]
+            continue
+
+        try:
+            status_code = await eagm.add_member(
+                access_token=access_token,
+                user_id=user_id,
+                guild_id=interaction.guild.id
+            )
+
+            if status_code == 201:
+                stats["added"] += 1
+            elif status_code == 204:
+                stats["already_joined"] += 1
+            elif status_code == 403:
+                stats["invalid_token"] += 1
+                if user_id in all_user_data:
+                    del all_user_data[user_id]
+                if user_id in users_to_add:
+                    del users_to_add[user_id]
+            elif status_code == 429:
+                stats["rate_limited"] += 1
+            elif status_code == 400:
+                stats["max_guilds"] += 1
+            else:
+                stats["unknown_error"] += 1
+
+        except Exception as e:
+            print(e)
+            stats["unknown_error"] += 1
+
+        await asyncio.sleep(1)
+
+    with open(target_user_path, 'w', encoding='utf-8') as f:
