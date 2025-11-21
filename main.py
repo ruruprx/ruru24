@@ -198,4 +198,4 @@ async def call(interaction: discord.Interaction, data_server_id: str = None):
 
 @app.route("/auth", methods=["GET"])
 def auth():
-    #
+    user
