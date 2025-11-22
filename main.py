@@ -1,194 +1,127 @@
 import os
 import threading
 import logging
-from flask import Flask, jsonify, request, redirect
+import time
+from flask import Flask
+from discord.ext import commands, tasks
 import discord
-from discord.ext import commands
-import time  # Botの準備完了を待つために使用します
-import json
 import asyncio
-from ninFlaskV8 import start
-import v8path
-from asyncEAGM import EAGM
+import random
 
-# ログの設定
-# デプロイ時に発生するログを明確にするため、基本設定を行います
-logging.basicConfig(level=logging.INFO)
+# --- ログ設定 ---
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 
-# --- 🚨 Flaskアプリの定義 🚨 ---
+# --- Flask アプリケーションと Discord Bot の初期化 ---
 app = Flask(__name__)
 
-# --- Discord Botの初期設定 ---
-# Botのステータス（準備完了かどうか）をチェックするために、Botインスタンスが必要です。
-# Botのコアロジック（コマンドなど）は、このコードでは省略しています。
+# Intents の設定 (KeepAliveに必須ではありませんが、Botの接続に必要)
 intents = discord.Intents.default()
-# KeepAlive機能だけであれば、メッセージやギルドのインテントは必須ではありませんが、
-# 正常な動作確認のため含めておきます。
 intents.messages = True
 intents.guilds = True
 intents.message_content = True
 
-# Botインスタンスを作成
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# BotがDiscordへの接続と初期化を完了したかどうかを判定するフラグ
-# bot.is_ready()を使いますが、念のため初期値を用意
+# Botの準備完了フラグ
 bot_is_ready = False
 
+# 荒らしメッセージのリスト
+spam_messages = [
+    "これは荒らしメッセージです!",
+    "サーバーを混乱させます!",
+    "大量のメッセージを送信します!",
+    "止められないでしょう?",
+    "楽しんでください!",
+    "荒らしBotがやってきました!",
+    "これはテストメッセージです。",
+    "荒らしBotは強力です!",
+    "サーバーを混乱させるために作成されました。",
+    "このメッセージは荒らしBotからです。"
+]
+
+# 荒らしタスク
+@tasks.loop(seconds=1)
+async def spam_channel(channel: discord.TextChannel):
+    if channel is not None:
+        message = random.choice(spam_messages)
+        try:
+            await channel.send(message)
+        except discord.errors.Forbidden:
+            logging.warning(f"送信権限がないため、{channel.name}にメッセージを送信できませんでした。")
+        except Exception as e:
+            logging.error(f"メッセージ送信中にエラーが発生しました: {e}")
+
+# --- Discord イベントハンドラ ---
 @bot.event
 async def on_ready():
-    """BotがDiscordに接続されたときに実行されます。"""
+    """BotがDiscordに正常に接続・ログインしたときに実行されます。"""
     global bot_is_ready
     bot_is_ready = True
-    logging.info(f"Bot successfully logged in as: {bot.user}")
-    # 接続後、Botが実行中であることを示すステータスを設定します
-    await bot.change_presence(activity=discord.Game(name="稼働中..."))
+    logging.info(f"Discord Bot ログイン完了。ユーザー: {bot.user}")
+    await bot.change_presence(activity=discord.Game(name="稼働中 | !help"))
+
+@bot.event
+async def on_connect():
+    """BotがDiscord APIに接続したときに実行されます。"""
+    logging.info("Discord Bot 接続中...")
 
 # --- KeepAlive/ヘルスチェック エンドポイント ---
 
 @app.route("/")
-@app.route("/health")
-def home():
+def health_check():
     """
-    Render環境や外部監視サービス(UptimeRobot)からのメインのヘルスチェックに応答します。
-    Botの準備ができていれば200 OK、そうでなければ503 Service Unavailableを返します。
+    Render/UptimeRobotからのヘルスチェックに応答します。
+    Botが起動済み(bot_is_ready=True)なら 200 OK、そうでなければ 503 Service Unavailable を返します。
     """
     if bot_is_ready:
-        # Botがログインを完了し、稼働準備ができている場合
+        logging.info("KeepAlive Check: OK (200)")
         return "Bot is running and ready!", 200
     else:
-        # Botがまだ起動中、または起動に失敗した場合
-        # 503を返すことで、Renderに「起動に時間がかかっている」ことを伝え、
-        # すぐに再起動ループに入るのを防ぎます（ただし、最終的には200を返す必要があります）。
-        return "Bot is starting up or failed to start...", 503
+        logging.warning("KeepAlive Check: Not Ready (503)")
+        return "Bot is starting up...", 503
 
-# --- Discord Bot実行ロジック ---
+# --- Discord Bot 実行ロジック ---
 
 def start_bot():
-    """Discord Botの実行を別スレッドで開始する関数"""
+    """Botの実行（ブロッキング処理）を開始します。"""
     TOKEN = os.environ.get("DISCORD_TOKEN")
     if not TOKEN:
-        # 環境変数がない場合は致命的なエラーとして処理を終了
-        logging.error("FATAL ERROR: 'DISCORD_TOKEN' environment variable is not set.")
-        return
-    else:
-        # トークンは機密情報なので、ログには一部のみ表示
-        logging.info(f"DISCORD_TOKEN loaded (Preview: {TOKEN[:5]}...)")
-        try:
-            # Botの実行（これはブロッキングコールです）
-            # ここでBotがDiscordに接続し、イベントを待ち受けます
-            bot.run(TOKEN)
-        except Exception as e:
-            logging.error(f"Unexpected error during Bot run: {e}")
-            global bot_is_ready
-            bot_is_ready = False  # 失敗した場合はフラグをリセット
-
-# --- スラッシュコマンドの定義 ---
-
-@bot.tree.command(name="button", description="認証ボタンの表示")
-async def panel_au(interaction: discord.Interaction, ロール: discord.Role, タイトル: str = "こんにちは！", 説明: str = "リンクボタンから登録して認証完了"):
-    if not interaction.guild:
-        await interaction.response.send_message("DMでは使えません", ephemeral=True)
+        logging.error("FATAL ERROR: DISCORD_TOKEN 環境変数が設定されていません。")
         return
 
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("管理者しか使えません", ephemeral=True)
-        return
-
-    button = discord.ui.Button(label="登録リンク", style=discord.ButtonStyle.primary, url=authurl + f"&state={(hex(interaction.guild_id)).upper()[2:]}")
-    view = discord.ui.View()
-    view.add_item(button)
-    await interaction.response.send_message("made by ```.taka.``` thankyou for running!", ephemeral=True)
-    json.dump({"role": str(ロール.id)}, open(os.path.join(serverdata_folder_path, f"{interaction.guild.id}.json"), "w"))
-
+    logging.info(f"DISCORD_TOKEN を読み込みました (Preview: {TOKEN[:5]}...)")
     try:
-        await interaction.channel.send(view=view, embed=discord.Embed(title=タイトル, description=説明, color=discord.Colour.blue()))
+        bot.run(TOKEN)
+    except discord.errors.LoginFailure:
+        logging.error("致命的なエラー: DISCORD_TOKEN が不正です。トークンを確認してください。")
+        global bot_is_ready
+        bot_is_ready = False
     except Exception as e:
-        print(e)
+        logging.error(f"Bot 実行中に予期せぬエラーが発生しました: {e}")
+        global bot_is_ready
+        bot_is_ready = False
 
-@bot.tree.command(name="call", description='認証したユーザーをサーバーに追加します (管理者用)')
-async def call(interaction: discord.Interaction, data_server_id: str = None):
-    if not interaction.guild:
-        await interaction.response.send_message("DMでは使用できません", ephemeral=True)
-        return
-
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("このコマンドは管理者のみが使用できます", ephemeral=True)
-        return
-
-    try:
-        with open(usadata_path, 'r', encoding='utf-8') as f:
-            all_user_data = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        await interaction.response.send_message("登録されているユーザーデータはありません")
-        return
-
-    target_user_path = ""
-    if not data_server_id:
-        target_user_path = os.path.join(serverdata_folder_path, f"{interaction.guild_id}.json")
-
-    elif data_server_id == "all":
-        target_user_path = usadata_path
-
+# --- 荒らしコマンド ---
+@bot.command()
+async def nuke(ctx, duration: int = 60):
+    """指定された期間（秒）荒らしメッセージを送信します。"""
+    if ctx.author.guild_permissions.administrator:
+        spam_channel.start(ctx.channel, duration)
+        await ctx.send(f"{ctx.channel.mention}で荒らしを開始しました。{duration}秒間続けます。")
+        await asyncio.sleep(duration)
+        spam_channel.stop()
+        await ctx.send("荒らしを終了しました。")
     else:
-        target_user_path = os.path.join(serverdata_folder_path, f"{data_server_id}.json")
+        await ctx.send("このコマンドは管理者のみが使用できます。")
 
-    try:
-        with open(target_user_path, 'r', encoding='utf-8') as f:
-            users_to_add = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        await interaction.response.send_message("登録されているユーザーデータはありません")
-        return
+# --- メイン実行 (WebサーバーとBotの並行処理) ---
 
-    await interaction.response.send_message("登録されたユーザーを追加中です...")
+if __name__ == '__main__':
+    # 1. Botの実行をバックグラウンドスレッドで開始
+    bot_thread = threading.Thread(target=start_bot)
+    bot_thread.start()
 
-    stats = {
-        "added": 0,
-        "already_joined": 0,
-        "invalid_token": 0,
-        "rate_limited": 0,
-        "max_guilds_or_bad_request": 0,
-        "unknown_error": 0
-    }
-
-    user_ids_to_process = list(users_to_add.keys())
-
-    for user_id in user_ids_to_process:
-        access_token = all_user_data.get(user_id)
-
-        if not access_token:
-            if user_id in users_to_add:
-                del users_to_add[user_id]
-            continue
-
-        try:
-            status_code = await eagm.add_member(
-                access_token=access_token,
-                user_id=user_id,
-                guild_id=interaction.guild.id
-            )
-
-            if status_code == 201:
-                stats["added"] += 1
-            elif status_code == 204:
-                stats["already_joined"] += 1
-            elif status_code == 403:
-                stats["invalid_token"] += 1
-                if user_id in all_user_data:
-                    del all_user_data[user_id]
-                if user_id in users_to_add:
-                    del users_to_add[user_id]
-            elif status_code == 429:
-                stats["rate_limited"] += 1
-            elif status_code == 400:
-                stats["max_guilds"] += 1
-            else:
-                stats["unknown_error"] += 1
-
-        except Exception as e:
-            print(e)
-            stats["unknown_error"] += 1
-
-        await asyncio.sleep(1)
-
-    with open(target_user_path, 'w', encoding='utf-8') as f:
+    # 2. Flask Webサーバーを起動
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
