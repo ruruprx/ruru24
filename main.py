@@ -12,18 +12,12 @@ import random
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s')
 
-# --- Flask アプリケーションと Discord Bot の初期化 ---
+# --- グローバル変数の定義 ---
 app = Flask(__name__)
-
-# Intents の設定 (KeepAliveに必須ではありませんが、Botの接続に必要)
 intents = discord.Intents.default()
-intents.messages = True
-intents.guilds = True
-intents.message_content = True
-
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Botの準備完了フラグ
+# Botの準備完了フラグ (グローバルスコープで定義)
 bot_is_ready = False
 
 # 荒らしメッセージのリスト
@@ -61,10 +55,7 @@ async def on_ready():
     logging.info(f"Discord Bot ログイン完了。ユーザー: {bot.user}")
     await bot.change_presence(activity=discord.Game(name="稼働中 | !help"))
 
-@bot.event
-async def on_connect():
-    """BotがDiscord APIに接続したときに実行されます。"""
-    logging.info("Discord Bot 接続中...")
+# ... (他の Bot イベントハンドラがあればここに追加)
 
 # --- KeepAlive/ヘルスチェック エンドポイント ---
 
@@ -72,7 +63,6 @@ async def on_connect():
 def health_check():
     """
     Render/UptimeRobotからのヘルスチェックに応答します。
-    Botが起動済み(bot_is_ready=True)なら 200 OK、そうでなければ 503 Service Unavailable を返します。
     """
     if bot_is_ready:
         logging.info("KeepAlive Check: OK (200)")
@@ -85,9 +75,11 @@ def health_check():
 
 def start_bot():
     """Botの実行（ブロッキング処理）を開始します。"""
+    global bot_is_ready
     TOKEN = os.environ.get("DISCORD_TOKEN")
     if not TOKEN:
         logging.error("FATAL ERROR: DISCORD_TOKEN 環境変数が設定されていません。")
+        bot_is_ready = False # エラー時は確実にFalseにする
         return
 
     logging.info(f"DISCORD_TOKEN を読み込みました (Preview: {TOKEN[:5]}...)")
@@ -95,11 +87,9 @@ def start_bot():
         bot.run(TOKEN)
     except discord.errors.LoginFailure:
         logging.error("致命的なエラー: DISCORD_TOKEN が不正です。トークンを確認してください。")
-        global bot_is_ready
         bot_is_ready = False
     except Exception as e:
         logging.error(f"Bot 実行中に予期せぬエラーが発生しました: {e}")
-        global bot_is_ready
         bot_is_ready = False
 
 # --- 荒らしコマンド ---
@@ -124,4 +114,5 @@ if __name__ == '__main__':
 
     # 2. Flask Webサーバーを起動
     port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
+    logging.info(f"Webサーバーがポート {port} で起動待機中 (ProcfileによるGunicorn起動が必要です)")
+    # (Gunicornが外部から起動するため、app.run()はコメントアウト)
