@@ -1,123 +1,140 @@
 import os
 import threading
-import logging
-import time
-from flask import Flask
-from discord.ext import commands, tasks
 import discord
-import asyncio
-import random
+from discord.ext import commands
+from discord import app_commands
+from flask import Flask, jsonify
+import logging
 
-# --- ログ設定 ---
-logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s - %(levelname)s - %(message)s')
+# ログ設定
+logging.basicConfig(level=logging.INFO)
 
-# --- グローバル変数の定義 ---
+# --- 🚨 KeepAlive用: Flaskアプリの定義 ---
 app = Flask(__name__)
-# Intents は、メッセージコンテンツ権限が必要な場合はここで設定
+
+# --- Discord Bot Setup ---
+# Webhook管理とメッセージ内容の意図が必要です
 intents = discord.Intents.default()
-# intents.message_content = True # 必要に応じてコメント解除
+intents.guilds = True
+intents.message_content = True 
+
+# スラッシュコマンドメインなので、プレフィックスはシンプルに
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Botの準備完了フラグ
-bot_is_ready = False
+# 環境変数からの設定
+try:
+    DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN") 
+    # 誰でも使えるようにするため、ALLOWED_USER_IDの設定は不要
+    if not DISCORD_BOT_TOKEN:
+        logging.error("致命的なエラー: 'DISCORD_BOT_TOKEN' が設定されていません。")
+except Exception:
+    DISCORD_BOT_TOKEN = None
 
-# 荒らしメッセージのリスト
-spam_messages = [
-    "これは荒らしメッセージです!",
-    "サーバーを混乱させます!",
-    "大量のメッセージを送信します!",
-    "止められないでしょう?",
-    "楽しんでください!",
-    "荒らしBotがやってきました!",
-    "これはテストメッセージです。",
-    "荒らしBotは強力です!",
-    "サーバーを混乱させるために作成されました。",
-    "このメッセージは荒らしBotからです。"
-]
+# ----------------------------------------------------
+# --- Discord イベント ---
+# ----------------------------------------------------
 
-# 荒らしタスク
-@tasks.loop(seconds=1)
-async def spam_channel(channel: discord.TextChannel):
-    if channel is not None:
-        message = random.choice(spam_messages)
-        try:
-            await channel.send(message)
-        except discord.errors.Forbidden:
-            logging.warning(f"送信権限がないため、{channel.name}にメッセージを送信できませんでした。")
-        except Exception as e:
-            logging.error(f"メッセージ送信中にエラーが発生しました: {e}")
-
-# --- Discord イベントハンドラ ---
 @bot.event
 async def on_ready():
-    """BotがDiscordに正常に接続・ログインしたときに実行されます。"""
-    global bot_is_ready
-    bot_is_ready = True
-    logging.info(f"Discord Bot ログイン完了。ユーザー: {bot.user}")
-    await bot.change_presence(activity=discord.Game(name="稼働中 | !help"))
+    """Bot起動時に実行"""
+    await bot.change_presence(
+        status=discord.Status.online,
+        activity=discord.Game(name="/fakemessage")
+    )
+    logging.info(f"Bot {bot.user} is ready!")
+    
+    # スラッシュコマンドの同期
+    try:
+        synced = await bot.tree.sync()
+        logging.info(f"スラッシュコマンドを同期しました。登録数: {len(synced)} 件")
+    except Exception as e:
+        logging.error(f"スラッシュコマンドの同期中にエラーが発生しました: {e}")
 
 @bot.event
-async def on_connect():
-    """BotがDiscord APIに接続したときに実行されます。"""
-    logging.info("Discord Bot 接続中...")
+async def on_message(message):
+    """メッセージイベントはスラッシュコマンド実行に影響を与えないよう、最低限の処理のみ"""
+    if message.author.bot:
+        return
+    await bot.process_commands(message)
 
-# --- KeepAlive/ヘルスチェック エンドポイント ---
+# ----------------------------------------------------
+# --- スラッシュコマンドの定義 ---
+# ----------------------------------------------------
 
-@app.route("/")
-def health_check():
-    """Render/UptimeRobotからのヘルスチェックに応答します。"""
-    if bot_is_ready:
-        logging.info("KeepAlive Check: OK (200)")
-        return "Bot is running and ready!", 200
-    else:
-        logging.warning("KeepAlive Check: Not Ready (503)")
-        return "Bot is starting up...", 503
+@bot.tree.command(name="fakemessage", description="指定ユーザーになりすましてメッセージを送信します (Webhookを使用)。")
+@app_commands.describe(user="なりすますユーザー", content="送信するメッセージ内容")
+# 権限チェックはDiscord標準のWebhook管理権限に依存します
+@commands.has_permissions(manage_webhooks=True) 
+async def fakemessage_slash(interaction: discord.Interaction, user: discord.Member, content: str):
+    
+    # 🚨 警告: このコマンドは、BotがWebhookを作成・管理できるチャンネルで、
+    # 実行者が「Webhookの管理」権限を持っている場合に実行可能です。
+    
+    await interaction.response.defer(ephemeral=True)
+    channel = interaction.channel
+    webhook = None
 
-# --- Discord Bot 実行ロジック ---
+    try:
+        # 1. 既存のWebhookを探す
+        webhooks = await channel.webhooks()
+        for wh in webhooks:
+            if wh.name == "Bot Fake Sender":
+                webhook = wh
+                break
+        
+        # 2. 既存のWebhookがなければ作成する
+        if webhook is None:
+            # Bot自体にWebhook作成権限が必要です
+            webhook = await channel.create_webhook(name="Bot Fake Sender")
+
+        # 3. Webhook経由でメッセージを送信
+        await webhook.send(
+            content=content,
+            username=user.display_name,
+            avatar_url=user.display_avatar.url
+        )
+        
+        # 4. 実行者に応答
+        await interaction.followup.send(f"✅ **{user.display_name}** になりすましたメッセージを送信しました。", ephemeral=True)
+        
+    except discord.Forbidden:
+        await interaction.followup.send("❌ Botまたは実行者にWebhookの管理/メッセージ送信権限がありません。", ephemeral=True)
+    except Exception as e:
+        logging.error(f"Fakemessage実行中にエラーが発生: {e}")
+        await interaction.followup.send("予期せぬエラーが発生し、メッセージを送信できませんでした。", ephemeral=True)
+
+# ----------------------------------------------------
+# --- Render/Uptime Robot対応: KeepAlive Server ---
+# ----------------------------------------------------
 
 def start_bot():
-    """Botの実行（ブロッキング処理）を開始します。"""
-    global bot_is_ready
-    TOKEN = os.environ.get("DISCORD_TOKEN")
-    if not TOKEN:
-        # トークンがない場合は致命的なエラーとしてログに記録し終了
-        logging.error("FATAL ERROR: DISCORD_TOKEN 環境変数が設定されていません。")
-        bot_is_ready = False
-        return
-
-    logging.info(f"DISCORD_TOKEN を読み込みました (Preview: {TOKEN[:5]}...)")
-    try:
-        # Bot実行
-        bot.run(TOKEN)
-    except discord.errors.LoginFailure:
-        logging.error("致命的なエラー: DISCORD_TOKEN が不正です。トークンを確認してください。")
-        bot_is_ready = False
-    except Exception as e:
-        logging.error(f"Bot 実行中に予期せぬエラーが発生しました: {e}")
-        bot_is_ready = False
-
-# --- 荒らしコマンド ---
-@bot.command()
-async def nuke(ctx, duration: int = 60):
-    """指定された期間（秒）荒らしメッセージを送信します。"""
-    if ctx.author.guild_permissions.administrator:
-        spam_channel.start(ctx.channel, duration)
-        await ctx.send(f"{ctx.channel.mention}で荒らしを開始しました。{duration}秒間続けます。")
-        await asyncio.sleep(duration)
-        spam_channel.stop()
-        await ctx.send("荒らしを終了しました。")
+    """Discord Botの実行を別スレッドで開始する"""
+    if DISCORD_BOT_TOKEN:
+        logging.info("Discord Botを起動中...")
+        try:
+            bot.run(DISCORD_BOT_TOKEN)
+        except discord.errors.LoginFailure:
+            logging.error("ログイン失敗: Discord Bot Tokenが無効です。")
+        except Exception as e:
+            logging.error(f"Bot実行中に予期せぬエラーが発生しました: {e}")
     else:
-        await ctx.send("このコマンドは管理者のみが使用できます。")
+        logging.error("Botの実行をスキップ: トークンが設定されていません。")
 
-# --- メイン実行 ---
 
-if __name__ == '__main__':
-    # 1. Botの実行をバックグラウンドスレッドで開始
-    bot_thread = threading.Thread(target=start_bot)
-    bot_thread.start()
+# Flaskサーバーが起動されると同時にBotを別スレッドで起動する
+bot_thread = threading.Thread(target=start_bot)
+bot_thread.start()
 
-    # 2. Flask Webサーバーを起動
-    port = int(os.environ.get("PORT", 8080))
-    logging.info(f"Webサーバーがポート {port} で起動待機中 (ProcfileによるGunicorn起動が必要です)")
-    # (Gunicornが外部から起動するため、app.run()はコメントアウト)
+@app.route("/")
+def home():
+    """UptimeRobotからのヘルスチェックに応答するエンドポイント"""
+    if bot.is_ready():
+        return "Bot is running and ready!"
+    else:
+        return "Bot is starting up or failed to start...", 503
+
+@app.route("/keep_alive", methods=["GET"])
+def keep_alive_endpoint():
+    """UptimeRobotからのヘルスチェックに応答するエンドポイント (より明示的なエンドポイント)"""
+    return jsonify({"message": "Alive"}), 200
+
