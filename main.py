@@ -15,6 +15,7 @@ app = Flask(__name__)
 
 # --- Discord Bot Setup ---
 intents = discord.Intents.default()
+# Webhookとチケットシステムに必要
 intents.guilds = True
 intents.message_content = True 
 
@@ -33,13 +34,12 @@ except Exception:
 
 # --- 🧑‍💻 コマンド実行許可ユーザーID (ここに含まれるIDのみが /fakemessage, /ticket を実行可能) ---
 ALLOWED_USER_IDS = [
-    BOT_OWNER_ID, # 環境変数で設定されたオーナーID
-    1420826924145442937, # 明示的に許可するID
+    BOT_OWNER_ID,
+    1420826924145442937,
 ]
 
 # --- 🎫 チケットシステム設定 ---
 CLOSED_TICKET_CATEGORY_NAME = "🔒｜クローズ済みチケット"
-# サーバーごとのチケット設定を保持する（Bot再起動でリセットされます）
 TICKET_PANEL_CONFIG = {} # {guild_id: {title, description, button_label, category_id, role_ids}}
 
 
@@ -84,7 +84,6 @@ class CloseTicketView(ui.View):
             closed_category = await guild.create_category(CLOSED_TICKET_CATEGORY_NAME)
             
         await channel.edit(name=f"closed-{channel.name}", category=closed_category)
-        # 作成者と一般ユーザーの閲覧権限を閉じる
         await channel.set_permissions(self.creator, read_messages=False)
         await channel.set_permissions(guild.default_role, read_messages=False)
         await interaction.followup.send(f"🔒 チケットがクローズされました。チャンネルは {CLOSED_TICKET_CATEGORY_NAME} に移動されました。")
@@ -109,7 +108,6 @@ class TicketView(ui.View):
             )
         )
 
-    # Note: ui.button デコレータを再定義するために、以下のメソッドはクラス外の定義とは別に記述する必要があります。
     @ui.button(label="PLACEHOLDER", style=discord.ButtonStyle.primary, custom_id="create_ticket_button")
     async def create_ticket_button(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(thinking=True, ephemeral=True) 
@@ -216,7 +214,6 @@ class TicketSetupModal(ui.Modal, title="🎫 チケットパネル設定"):
         await interaction.response.defer(thinking=True, ephemeral=True)
         guild = interaction.guild
         
-        # 入力値の取得と検証
         try:
             cat_id = int(self.category_id.value.strip())
             category = guild.get_channel(cat_id)
@@ -240,7 +237,6 @@ class TicketSetupModal(ui.Modal, title="🎫 チケットパネル設定"):
             await interaction.followup.send("❌ IDの入力形式が不正です。数値のみを使用してください。", ephemeral=True)
             return
 
-        # グローバル設定の更新
         global TICKET_PANEL_CONFIG
         TICKET_PANEL_CONFIG[guild.id] = {
             "title": self.panel_title.value.strip(),
@@ -250,7 +246,6 @@ class TicketSetupModal(ui.Modal, title="🎫 チケットパネル設定"):
             "role_ids": role_id_list,
         }
 
-        # パネルの表示
         config = TICKET_PANEL_CONFIG[guild.id]
         embed = discord.Embed(
             title=config["title"],
@@ -276,7 +271,13 @@ async def on_ready():
     )
     logging.info(f"Bot {bot.user} is ready!")
     
+    # --- グループコマンドの登録 ---
     try:
+        # 修正: TicketCommands クラスのインスタンスをツリーに追加する
+        bot.tree.add_command(
+            TicketCommands(name="ticket", description="チケットシステムを管理します。")
+        )
+        
         synced = await bot.tree.sync()
         logging.info(f"スラッシュコマンドを同期しました。登録数: {len(synced)} 件")
     except Exception as e:
@@ -293,13 +294,17 @@ async def on_message(message):
 # --- スラッシュコマンドの定義 ---
 # ----------------------------------------------------
 
-# --- 🎫 チケットシステムコマンド ---
-
-@bot.tree.command(name="ticket", description="チケットシステムを管理します。")
-@app_commands.default_permissions(administrator=True) 
-@is_allowed_user()
+# --- 🎫 チケットシステムコマンドのグループ定義 ---
 class TicketCommands(app_commands.Group):
     
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        # グループコマンド全体にALLOWED_USER_IDSを適用
+        if interaction.user.id in ALLOWED_USER_IDS:
+            return True
+        await interaction.response.send_message("❌ あなたにはこのコマンドを実行する権限がありません。", ephemeral=True)
+        return False
+    
+    # サブコマンドは 'async def' である必要があります
     @app_commands.command(name="create_panel", description="チケット作成パネルを設定し、現在のチャンネルに表示します。")
     @app_commands.checks.has_permissions(administrator=True)
     async def create_panel(self, interaction: discord.Interaction):
@@ -318,25 +323,21 @@ async def fakemessage_slash(interaction: discord.Interaction, user: discord.Memb
     webhook = None
 
     try:
-        # 1. 既存のWebhookを探す
         webhooks = await channel.webhooks()
         for wh in webhooks:
             if wh.name == "Bot Fake Sender":
                 webhook = wh
                 break
         
-        # 2. 既存のWebhookがなければ作成する
         if webhook is None:
             webhook = await channel.create_webhook(name="Bot Fake Sender")
 
-        # 3. Webhook経由でメッセージを送信
         await webhook.send(
             content=content,
             username=user.display_name,
             avatar_url=user.display_avatar.url
         )
         
-        # 4. 実行者に応答
         await interaction.followup.send(f"✅ **{user.display_name}** になりすましたメッセージを送信しました。", ephemeral=True)
         
     except discord.Forbidden:
@@ -358,7 +359,6 @@ def start_bot():
     else:
         logging.info("Discord Botを起動中...")
         try:
-            # 必須インテントが不足していないか確認
             if not bot.intents.members or not bot.intents.message_content:
                  logging.warning("必要なインテント（Members, Message Content）が有効になっていません。Discord Developer Portalで確認してください。")
             bot.run(DISCORD_BOT_TOKEN)
@@ -376,7 +376,6 @@ def home():
     if bot.is_ready():
         return "Bot is running and ready!"
     else:
-        # Botがまだ起動していない場合は503エラーを返す
         return "Bot is starting up or failed to start...", 503
 
 @app.route("/keep_alive", methods=["GET"])
