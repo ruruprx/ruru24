@@ -24,7 +24,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # 環境変数からの設定
 try:
     DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN") 
-    # 🚨 コマンド実行を許可するユーザーID
+    # 🚨 コマンド実行を許可するユーザーID (使用しないが変数としては残す)
     BOT_OWNER_ID = int(os.environ.get("BOT_OWNER_ID", 0)) 
     if not DISCORD_BOT_TOKEN:
         logging.error("致命的なエラー: 'DISCORD_BOT_TOKEN' が設定されていません。")
@@ -32,11 +32,8 @@ except Exception:
     DISCORD_BOT_TOKEN = None
     BOT_OWNER_ID = 0
 
-# --- 🧑‍💻 コマンド実行許可ユーザーID ---
-ALLOWED_USER_IDS = [
-    BOT_OWNER_ID,
-    1420826924145442937,
-]
+# --- 🧑‍💻 コマンド実行許可ユーザーID (今回は使用しないため空のリストとして残す) ---
+ALLOWED_USER_IDS = []
 
 # --- 🎫 チケットシステム設定 ---
 CLOSED_TICKET_CATEGORY_NAME = "🔒｜クローズ済みチケット"
@@ -44,7 +41,7 @@ TICKET_PANEL_CONFIG = {} # {guild_id: {title, description, button_label, categor
 
 
 # ----------------------------------------------------
-# --- 🚨 コマンド実行制限チェック関数 🚨 ---
+# --- 🚨 コマンド実行制限チェック関数 (fakemessageから削除されたため、この関数自体は不要だが、残しておく) 🚨 ---
 # ----------------------------------------------------
 
 def is_allowed_user():
@@ -58,10 +55,11 @@ def is_allowed_user():
             ephemeral=True
         )
         return False
+    # このチェックは現在fakemessageから削除されているため、実行されません
     return app_commands.check(predicate)
 
 # ----------------------------------------------------
-# --- 🎫 チケットシステムのView, Modal定義 ---
+# --- 🎫 チケットシステムのView, Modal定義 (変更なし) ---
 # ----------------------------------------------------
 
 class CloseTicketView(ui.View):
@@ -259,7 +257,7 @@ class TicketSetupModal(ui.Modal, title="🎫 チケットパネル設定"):
 
 
 # ----------------------------------------------------
-# --- Discord イベント ---
+# --- Discord イベント (変更なし) ---
 # ----------------------------------------------------
 
 @bot.event
@@ -298,25 +296,23 @@ async def on_message(message):
 class TicketCommands(app_commands.Group):
     
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        # グループコマンド全体にALLOWED_USER_IDSを適用
-        if interaction.user.id in ALLOWED_USER_IDS:
-            return True
-        await interaction.response.send_message("❌ あなたにはこのコマンドを実行する権限がありません。", ephemeral=True)
-        return False
+        # このグループには特定のユーザーID制限を適用しないため、常にTrueを返す (ただし、サブコマンドで個別に権限チェックを行う)
+        return True
     
     # サブコマンドは 'async def' である必要があります
     @app_commands.command(name="create_panel", description="チケット作成パネルを設定し、現在のチャンネルに表示します。")
-    @app_commands.checks.has_permissions(administrator=True)
+    # 🚨 管理者権限チェックを残す
+    @app_commands.checks.has_permissions(administrator=True) 
     async def create_panel(self, interaction: discord.Interaction):
         # 設定モーダルを表示する
         await interaction.response.send_modal(TicketSetupModal(bot))
 
 
 # --- 管理コマンド (Fakemessage) ---
+# 🚨 @is_allowed_user() を削除
 
 @bot.tree.command(name="fakemessage", description="指定ユーザーになりすましてメッセージを送信します (Webhookを使用)。")
-@commands.has_permissions(manage_webhooks=True)
-@is_allowed_user()
+@commands.has_permissions(manage_webhooks=True) # Webhookの管理権限を持つユーザーなら誰でも実行可能
 async def fakemessage_slash(interaction: discord.Interaction, user: discord.Member, content: str):
     await interaction.response.defer(ephemeral=True)
     channel = interaction.channel
@@ -348,7 +344,7 @@ async def fakemessage_slash(interaction: discord.Interaction, user: discord.Memb
 
 
 # ----------------------------------------------------
-# --- Render/Uptime Robot対応: KeepAlive Server ---
+# --- Render/Uptime Robot対応: KeepAlive Server (変更なし) ---
 # ----------------------------------------------------
 
 def start_bot():
