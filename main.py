@@ -15,16 +15,16 @@ app = Flask(__name__)
 
 # --- Discord Bot Setup ---
 intents = discord.Intents.default()
-# Webhookとチケットシステムに必要
+# 必須インテント: Discord Developer PortalでServer Members IntentとMessage Content Intentを有効にしてください。
 intents.guilds = True
-intents.message_content = True 
+intents.members = True # メンバー情報を取得するために必要
+intents.message_content = True # on_messageイベント処理のために必要
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # 環境変数からの設定
 try:
     DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN") 
-    # 🚨 コマンド実行を許可するユーザーID (使用しないが変数としては残す)
     BOT_OWNER_ID = int(os.environ.get("BOT_OWNER_ID", 0)) 
     if not DISCORD_BOT_TOKEN:
         logging.error("致命的なエラー: 'DISCORD_BOT_TOKEN' が設定されていません。")
@@ -32,52 +32,38 @@ except Exception:
     DISCORD_BOT_TOKEN = None
     BOT_OWNER_ID = 0
 
-# --- 🧑‍💻 コマンド実行許可ユーザーID (今回は使用しないため空のリストとして残す) ---
-ALLOWED_USER_IDS = []
-
 # --- 🎫 チケットシステム設定 ---
 CLOSED_TICKET_CATEGORY_NAME = "🔒｜クローズ済みチケット"
-TICKET_PANEL_CONFIG = {} # {guild_id: {title, description, button_label, category_id, role_ids}}
-
-
-# ----------------------------------------------------
-# --- 🚨 コマンド実行制限チェック関数 (fakemessageから削除されたため、この関数自体は不要だが、残しておく) 🚨 ---
-# ----------------------------------------------------
-
-def is_allowed_user():
-    """ALLOWED_USER_IDSに含まれるユーザーのみが実行を許可されるカスタムチェック"""
-    async def predicate(interaction: discord.Interaction) -> bool:
-        if interaction.user.id in ALLOWED_USER_IDS:
-            return True
-        
-        await interaction.response.send_message(
-            "❌ あなたにはこのコマンドを実行する権限がありません。", 
-            ephemeral=True
-        )
-        return False
-    # このチェックは現在fakemessageから削除されているため、実行されません
-    return app_commands.check(predicate)
+# TICKET_PANEL_CONFIGは再起動でリセットされるため、/ticket create_panelを毎回実行してください。
+TICKET_PANEL_CONFIG = {} 
 
 # ----------------------------------------------------
-# --- 🎫 チケットシステムのView, Modal定義 (変更なし) ---
+# --- 🎫 チケットシステムのView, Modal定義 ---
 # ----------------------------------------------------
 
 class CloseTicketView(ui.View):
     """チケットチャンネル内で、チャンネルをクローズするために使用するボタンを定義するView。"""
     def __init__(self, bot: commands.Bot, creator: discord.Member):
-        super().__init__(timeout=None)
+        # タイムアウトをNoneにして永続化対応
+        super().__init__(timeout=None) 
         self.bot = bot
         self.creator = creator 
+        # persistent Viewのためにcustom_idを設定
+        self.add_item(self.close_ticket_button)
 
     @ui.button(label="🔒 チケットをクローズ", style=discord.ButtonStyle.red, custom_id="close_ticket_button")
     async def close_ticket_button(self, interaction: discord.Interaction, button: ui.Button):
+        # 作成者自身、または管理者権限を持つユーザーのみクローズを許可
         if interaction.user.id != self.creator.id and not interaction.user.guild_permissions.administrator:
              await interaction.response.send_message("❌ チケットをクローズできるのは作成者か管理者のみです。", ephemeral=True)
              return
+        
         await interaction.response.defer(thinking=True)
         channel = interaction.channel
         guild = interaction.guild
         closed_category = discord.utils.get(guild.categories, name=CLOSED_TICKET_CATEGORY_NAME)
+        
+        # クローズ済みカテゴリが存在しない場合は作成
         if not closed_category: 
             closed_category = await guild.create_category(CLOSED_TICKET_CATEGORY_NAME)
             
@@ -90,14 +76,16 @@ class CloseTicketView(ui.View):
 class TicketView(ui.View):
     """チケット作成ボタンと、それをクリックした後の処理を定義するView。"""
     def __init__(self, bot: commands.Bot, guild_id: int):
+        # タイムアウトをNoneにして永続化対応
         super().__init__(timeout=None) 
         self.bot = bot
         self.guild_id = guild_id
         
+        # ボタンをクリアし、設定に基づいたラベルで再定義
+        self.clear_items()
         config = TICKET_PANEL_CONFIG.get(guild_id, {})
         button_label = config.get("button_label", "🎫 チケットを作成")
         
-        self.clear_items()
         self.add_item(
             ui.Button(
                 label=button_label, 
@@ -108,21 +96,27 @@ class TicketView(ui.View):
 
     @ui.button(label="PLACEHOLDER", style=discord.ButtonStyle.primary, custom_id="create_ticket_button")
     async def create_ticket_button(self, interaction: discord.Interaction, button: ui.Button):
+        # 🚨 最重要: 3秒タイムアウト回避のため、最初に defer で応答
         await interaction.response.defer(thinking=True, ephemeral=True) 
+        
         guild = interaction.guild
         member = interaction.user
         
         config = TICKET_PANEL_CONFIG.get(guild.id)
         if not config:
-            await interaction.followup.send("❌ チケットパネルが設定されていません。管理者に連絡してください。", ephemeral=True)
+            await interaction.followup.send(
+                "❌ **エラー**: チケットパネルの設定情報が見つかりません。管理者に連絡するか、`/ticket create_panel` を実行し直してください。", 
+                ephemeral=True
+            )
             return
 
         ticket_category = guild.get_channel(config["category_id"])
         
         if not ticket_category or not isinstance(ticket_category, discord.CategoryChannel):
-            await interaction.followup.send("❌ 設定されたチケットカテゴリーが見つかりません。管理者に連絡してください。", ephemeral=True)
+            await interaction.followup.send("❌ 設定されたチケットカテゴリーIDが無効です。管理者に連絡してください。", ephemeral=True)
             return
             
+        # チャンネル名の重複チェック
         channel_name = f"ticket-{member.name.lower().replace(' ', '-')}"
         if discord.utils.get(ticket_category.channels, name=channel_name):
             await interaction.followup.send("⚠️ 既にチケットチャンネルがあります。既存のチャンネルを使用してください。", ephemeral=True)
@@ -141,13 +135,18 @@ class TicketView(ui.View):
                 overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
 
 
-        ticket_channel = await guild.create_text_channel(
-            name=channel_name,
-            category=ticket_category,
-            overwrites=overwrites
-        )
-        
-        # チケット作成時のメッセージは固定
+        # チャンネル作成と権限エラーの捕捉
+        try:
+            ticket_channel = await guild.create_text_channel(
+                name=channel_name,
+                category=ticket_category,
+                overwrites=overwrites
+            )
+        except discord.Forbidden:
+            await interaction.followup.send("❌ **エラー**: チケットチャンネルを作成する権限がBotにありません。Botのロールに『チャンネルの管理』権限があるか確認してください。", ephemeral=True)
+            return
+            
+        # チケット作成時のメッセージ送信
         await ticket_channel.send(
             f"{member.mention} さん、チケットを作成しました。**【問題を解決するために必要な情報を記述してください】**\n"
             "管理者が対応するまでしばらくお待ちください。"
@@ -251,13 +250,14 @@ class TicketSetupModal(ui.Modal, title="🎫 チケットパネル設定"):
             color=discord.Color.blue()
         )
         
+        # 新しいパネルを表示し、そのビューにguild.idを渡す
         await interaction.channel.send(embed=embed, view=TicketView(self.bot, guild.id))
         
         await interaction.followup.send("✅ チケットパネルをこのチャンネルに表示しました。", ephemeral=True)
 
 
 # ----------------------------------------------------
-# --- Discord イベント (変更なし) ---
+# --- Discord イベント ---
 # ----------------------------------------------------
 
 @bot.event
@@ -271,19 +271,24 @@ async def on_ready():
     
     # --- グループコマンドの登録 ---
     try:
-        # TicketCommands クラスのインスタンスをツリーに追加する
         bot.tree.add_command(
             TicketCommands(name="ticket", description="チケットシステムを管理します。")
         )
         
         synced = await bot.tree.sync()
         logging.info(f"スラッシュコマンドを同期しました。登録数: {len(synced)} 件")
+
+        # Botが再起動した際に、過去に送信した永続ビュー（ボタン）をロードする
+        for guild in bot.guilds:
+            if guild.id in TICKET_PANEL_CONFIG:
+                bot.add_view(TicketView(bot, guild.id))
+        
     except Exception as e:
         logging.error(f"スラッシュコマンドの同期中にエラーが発生しました: {e}")
 
 @bot.event
 async def on_message(message):
-    """メッセージイベントはスラッシュコマンド実行に影響を与えないよう、最低限の処理のみ"""
+    """メッセージイベント"""
     if message.author.bot:
         return
     await bot.process_commands(message)
@@ -295,24 +300,21 @@ async def on_message(message):
 # --- 🎫 チケットシステムコマンドのグループ定義 ---
 class TicketCommands(app_commands.Group):
     
+    # このグループ内のコマンドは、サブコマンドで個別に権限チェックを行う
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        # このグループには特定のユーザーID制限を適用しないため、常にTrueを返す (ただし、サブコマンドで個別に権限チェックを行う)
         return True
     
-    # サブコマンドは 'async def' である必要があります
     @app_commands.command(name="create_panel", description="チケット作成パネルを設定し、現在のチャンネルに表示します。")
-    # 🚨 管理者権限チェックを残す
-    @app_commands.checks.has_permissions(administrator=True) 
+    @app_commands.checks.has_permissions(administrator=True) # 🚨 管理者のみ実行可能
     async def create_panel(self, interaction: discord.Interaction):
         # 設定モーダルを表示する
         await interaction.response.send_modal(TicketSetupModal(bot))
 
 
 # --- 管理コマンド (Fakemessage) ---
-# 🚨 @is_allowed_user() を削除
 
 @bot.tree.command(name="fakemessage", description="指定ユーザーになりすましてメッセージを送信します (Webhookを使用)。")
-@commands.has_permissions(manage_webhooks=True) # Webhookの管理権限を持つユーザーなら誰でも実行可能
+@commands.has_permissions(manage_webhooks=True) # 🚨 Webhookの管理権限を持つユーザーなら誰でも実行可能
 async def fakemessage_slash(interaction: discord.Interaction, user: discord.Member, content: str):
     await interaction.response.defer(ephemeral=True)
     channel = interaction.channel
@@ -344,7 +346,7 @@ async def fakemessage_slash(interaction: discord.Interaction, user: discord.Memb
 
 
 # ----------------------------------------------------
-# --- Render/Uptime Robot対応: KeepAlive Server (変更なし) ---
+# --- Render/Uptime Robot対応: KeepAlive Server ---
 # ----------------------------------------------------
 
 def start_bot():
