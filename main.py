@@ -32,7 +32,7 @@ except Exception:
     DISCORD_BOT_TOKEN = None
     BOT_OWNER_ID = 0
 
-# --- 🧑‍💻 コマンド実行許可ユーザーID (ここに含まれるIDのみが /fakemessage, /ticket を実行可能) ---
+# --- 🧑‍💻 コマンド実行許可ユーザーID ---
 ALLOWED_USER_IDS = [
     BOT_OWNER_ID,
     1420826924145442937,
@@ -273,7 +273,7 @@ async def on_ready():
     
     # --- グループコマンドの登録 ---
     try:
-        # 修正: TicketCommands クラスのインスタンスをツリーに追加する
+        # TicketCommands クラスのインスタンスをツリーに追加する
         bot.tree.add_command(
             TicketCommands(name="ticket", description="チケットシステムを管理します。")
         )
@@ -361,7 +361,10 @@ def start_bot():
         try:
             if not bot.intents.members or not bot.intents.message_content:
                  logging.warning("必要なインテント（Members, Message Content）が有効になっていません。Discord Developer Portalで確認してください。")
-            bot.run(DISCORD_BOT_TOKEN)
+            
+            # Gunicornのタイムアウト対策のため、ログレベルをINFOに設定
+            bot.run(DISCORD_BOT_TOKEN, log_level=logging.INFO) 
+            
         except discord.errors.LoginFailure:
             logging.error("ログイン失敗: Discord Bot Tokenが無効です。")
         except Exception as e:
