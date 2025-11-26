@@ -3,7 +3,3 @@ Flask
 gunicorn
 requests
 colorama
-PyNaCl
-yt-dlp          
-ffmpeg-python  
-
