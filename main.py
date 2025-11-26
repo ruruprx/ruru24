@@ -6,6 +6,9 @@ from discord import app_commands, ui
 from flask import Flask, jsonify
 import logging
 from typing import Optional
+import asyncio
+import yt_dlp
+import ffmpeg
 
 # ログ設定
 logging.basicConfig(level=logging.INFO)
@@ -15,245 +18,66 @@ app = Flask(__name__)
 
 # --- Discord Bot Setup ---
 intents = discord.Intents.default()
-# 必須インテント: Discord Developer PortalでServer Members IntentとMessage Content Intentを有効にしてください。
 intents.guilds = True
-intents.members = True # メンバー情報を取得するために必要
-intents.message_content = True # on_messageイベント処理のために必要
+intents.members = True 
+intents.message_content = True 
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # 環境変数からの設定
 try:
     DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN") 
-    BOT_OWNER_ID = int(os.environ.get("BOT_OWNER_ID", 0)) 
     if not DISCORD_BOT_TOKEN:
         logging.error("致命的なエラー: 'DISCORD_BOT_TOKEN' が設定されていません。")
 except Exception:
     DISCORD_BOT_TOKEN = None
-    BOT_OWNER_ID = 0
 
-# --- 🎫 チケットシステム設定 ---
-CLOSED_TICKET_CATEGORY_NAME = "🔒｜クローズ済みチケット"
-# TICKET_PANEL_CONFIGは再起動でリセットされるため、/ticket create_panelを毎回実行してください。
-TICKET_PANEL_CONFIG = {} 
+# --- YTDL設定 (YouTubeダウンロードとストリーム用) ---
+# ytdl-coreモジュールに依存するストリーミングソースを作成するヘルパークラス
+class YTDLSource(discord.PCMVolumeTransformer):
+    YTDL_OPTIONS = {
+        'format': 'bestaudio/best',
+        'extractaudio': True,
+        'audioformat': 'mp3',
+        'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
+        'restrictfilenames': True,
+        'noplaylist': True,
+        'nocheckcertificate': True,
+        'ignoreerrors': False,
+        'logtostderr': False,
+        'quiet': True,
+        'no_warnings': True,
+        'default_search': 'auto',
+        'source_address': '0.0.0.0',  # bind to IPv4
+    }
+    FFMPEG_OPTIONS = {
+        'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+        'options': '-vn',
+    }
 
-# ----------------------------------------------------
-# --- 🎫 チケットシステムのView, Modal定義 ---
-# ----------------------------------------------------
+    def __init__(self, source, *, data, volume=0.5):
+        super().__init__(source, volume)
+        self.data = data
+        self.title = data.get('title')
+        self.url = data.get('url')
 
-class CloseTicketView(ui.View):
-    """チケットチャンネル内で、チャンネルをクローズするために使用するボタンを定義するView。"""
-    def __init__(self, bot: commands.Bot, creator: discord.Member):
-        # タイムアウトをNoneにして永続化対応
-        super().__init__(timeout=None) 
-        self.bot = bot
-        self.creator = creator 
-        # persistent Viewのためにcustom_idを設定
-        self.add_item(self.close_ticket_button)
-
-    @ui.button(label="🔒 チケットをクローズ", style=discord.ButtonStyle.red, custom_id="close_ticket_button")
-    async def close_ticket_button(self, interaction: discord.Interaction, button: ui.Button):
-        # 作成者自身、または管理者権限を持つユーザーのみクローズを許可
-        if interaction.user.id != self.creator.id and not interaction.user.guild_permissions.administrator:
-             await interaction.response.send_message("❌ チケットをクローズできるのは作成者か管理者のみです。", ephemeral=True)
-             return
+    @classmethod
+    async def from_url(cls, url, *, loop=None, stream=True):
+        loop = loop or asyncio.get_event_loop()
+        ydl = yt_dlp.YoutubeDL(cls.YTDL_OPTIONS)
         
-        await interaction.response.defer(thinking=True)
-        channel = interaction.channel
-        guild = interaction.guild
-        closed_category = discord.utils.get(guild.categories, name=CLOSED_TICKET_CATEGORY_NAME)
+        # yt-dlpによる情報抽出をスレッドプールで実行
+        data = await loop.run_in_executor(None, lambda: ydl.extract_info(url, download=not stream))
+
+        if 'entries' in data:
+            # プレイリストまたは複数の結果がある場合は最初のものを取得
+            data = data['entries'][0]
+
+        # ストリーミングソースURLを取得
+        filename = data['url'] if stream else ydl.prepare_filename(data)
         
-        # クローズ済みカテゴリが存在しない場合は作成
-        if not closed_category: 
-            closed_category = await guild.create_category(CLOSED_TICKET_CATEGORY_NAME)
-            
-        await channel.edit(name=f"closed-{channel.name}", category=closed_category)
-        await channel.set_permissions(self.creator, read_messages=False)
-        await channel.set_permissions(guild.default_role, read_messages=False)
-        await interaction.followup.send(f"🔒 チケットがクローズされました。チャンネルは {CLOSED_TICKET_CATEGORY_NAME} に移動されました。")
-
-
-class TicketView(ui.View):
-    """チケット作成ボタンと、それをクリックした後の処理を定義するView。"""
-    def __init__(self, bot: commands.Bot, guild_id: int):
-        # タイムアウトをNoneにして永続化対応
-        super().__init__(timeout=None) 
-        self.bot = bot
-        self.guild_id = guild_id
-        
-        # ボタンをクリアし、設定に基づいたラベルで再定義
-        self.clear_items()
-        config = TICKET_PANEL_CONFIG.get(guild_id, {})
-        button_label = config.get("button_label", "🎫 チケットを作成")
-        
-        self.add_item(
-            ui.Button(
-                label=button_label, 
-                style=discord.ButtonStyle.primary, 
-                custom_id="create_ticket_button"
-            )
-        )
-
-    @ui.button(label="PLACEHOLDER", style=discord.ButtonStyle.primary, custom_id="create_ticket_button")
-    async def create_ticket_button(self, interaction: discord.Interaction, button: ui.Button):
-        # 🚨 最重要: 3秒タイムアウト回避のため、最初に defer で応答
-        await interaction.response.defer(thinking=True, ephemeral=True) 
-        
-        guild = interaction.guild
-        member = interaction.user
-        
-        config = TICKET_PANEL_CONFIG.get(guild.id)
-        if not config:
-            await interaction.followup.send(
-                "❌ **エラー**: チケットパネルの設定情報が見つかりません。管理者に連絡するか、`/ticket create_panel` を実行し直してください。", 
-                ephemeral=True
-            )
-            return
-
-        ticket_category = guild.get_channel(config["category_id"])
-        
-        if not ticket_category or not isinstance(ticket_category, discord.CategoryChannel):
-            await interaction.followup.send("❌ 設定されたチケットカテゴリーIDが無効です。管理者に連絡してください。", ephemeral=True)
-            return
-            
-        # チャンネル名の重複チェック
-        channel_name = f"ticket-{member.name.lower().replace(' ', '-')}"
-        if discord.utils.get(ticket_category.channels, name=channel_name):
-            await interaction.followup.send("⚠️ 既にチケットチャンネルがあります。既存のチャンネルを使用してください。", ephemeral=True)
-            return
-
-        # 権限の上書き設定
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(read_messages=False),
-            member: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-        }
-        
-        # 閲覧可能ロールの設定を反映
-        for role_id in config["role_ids"]:
-            role = guild.get_role(role_id)
-            if role:
-                overwrites[role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
-
-
-        # チャンネル作成と権限エラーの捕捉
-        try:
-            ticket_channel = await guild.create_text_channel(
-                name=channel_name,
-                category=ticket_category,
-                overwrites=overwrites
-            )
-        except discord.Forbidden:
-            await interaction.followup.send("❌ **エラー**: チケットチャンネルを作成する権限がBotにありません。Botのロールに『チャンネルの管理』権限があるか確認してください。", ephemeral=True)
-            return
-            
-        # チケット作成時のメッセージ送信
-        await ticket_channel.send(
-            f"{member.mention} さん、チケットを作成しました。**【問題を解決するために必要な情報を記述してください】**\n"
-            "管理者が対応するまでしばらくお待ちください。"
-        )
-        close_view = CloseTicketView(self.bot, member)
-        await ticket_channel.send(
-            "問題を解決したい場合、下の **'🔒 チケットをクローズ'** ボタンを押してください。",
-            view=close_view
-        )
-        await interaction.followup.send(f"✅ チケットを作成しました！ {ticket_channel.mention} に移動してください。", ephemeral=True)
-
-
-class TicketSetupModal(ui.Modal, title="🎫 チケットパネル設定"):
-    """チケットパネルの各種設定を受け付けるモーダル"""
-    def __init__(self, bot: commands.Bot):
-        super().__init__(timeout=300)
-        self.bot = bot
-        
-    # --- 入力項目 ---
-    
-    panel_title = ui.TextInput(
-        label="パネルのタイトル",
-        default="サポートチケット",
-        style=discord.TextStyle.short,
-        required=True,
-        max_length=100,
-    )
-
-    panel_description = ui.TextInput(
-        label="パネルの説明",
-        default="下のボタンを押してチケットを作成してください。",
-        style=discord.TextStyle.paragraph,
-        required=True,
-        max_length=1000,
-    )
-    
-    button_label = ui.TextInput(
-        label="ボタンのラベル",
-        default="🎫 チケットを作成",
-        style=discord.TextStyle.short,
-        required=True,
-        max_length=80,
-    )
-    
-    category_id = ui.TextInput(
-        label="チケット作成カテゴリーID",
-        placeholder="ここにカテゴリーIDをペーストしてください",
-        style=discord.TextStyle.short,
-        required=True,
-        max_length=20,
-    )
-    
-    role_ids = ui.TextInput(
-        label="閲覧可能ロールID (カンマ区切り)",
-        placeholder="対応ロールのIDをカンマ(,)で区切って入力 (任意)",
-        style=discord.TextStyle.short,
-        required=False,
-        max_length=200,
-    )
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(thinking=True, ephemeral=True)
-        guild = interaction.guild
-        
-        try:
-            cat_id = int(self.category_id.value.strip())
-            category = guild.get_channel(cat_id)
-            if not category or not isinstance(category, discord.CategoryChannel):
-                await interaction.followup.send("❌ 入力されたカテゴリーIDが無効です。", ephemeral=True)
-                return
-            
-            role_id_list = []
-            if self.role_ids.value.strip():
-                for role_str in self.role_ids.value.split(','):
-                    role_id_str = role_str.strip()
-                    if role_id_str.isdigit():
-                        role_id = int(role_id_str)
-                        role = guild.get_role(role_id)
-                        if role:
-                            role_id_list.append(role_id)
-                        else:
-                            await interaction.followup.send(f"⚠️ ロールID `{role_id_str}` は見つかりませんでした。スキップします。", ephemeral=True)
-        
-        except ValueError:
-            await interaction.followup.send("❌ IDの入力形式が不正です。数値のみを使用してください。", ephemeral=True)
-            return
-
-        global TICKET_PANEL_CONFIG
-        TICKET_PANEL_CONFIG[guild.id] = {
-            "title": self.panel_title.value.strip(),
-            "description": self.panel_description.value.strip(),
-            "button_label": self.button_label.value.strip(),
-            "category_id": cat_id,
-            "role_ids": role_id_list,
-        }
-
-        config = TICKET_PANEL_CONFIG[guild.id]
-        embed = discord.Embed(
-            title=config["title"],
-            description=config["description"],
-            color=discord.Color.blue()
-        )
-        
-        # 新しいパネルを表示し、そのビューにguild.idを渡す
-        await interaction.channel.send(embed=embed, view=TicketView(self.bot, guild.id))
-        
-        await interaction.followup.send("✅ チケットパネルをこのチャンネルに表示しました。", ephemeral=True)
+        # discord.FFmpegPCMAudio でストリーミングを開始
+        return cls(discord.FFmpegPCMAudio(filename, **cls.FFMPEG_OPTIONS), data=data)
 
 
 # ----------------------------------------------------
@@ -265,84 +89,95 @@ async def on_ready():
     """Bot起動時に実行"""
     await bot.change_presence(
         status=discord.Status.online,
-        activity=discord.Game(name="/fakemessage & /ticket")
+        activity=discord.Game(name="/play & /stop")
     )
     logging.info(f"Bot {bot.user} is ready!")
     
-    # --- グループコマンドの登録 ---
+    # --- スラッシュコマンドの登録 ---
     try:
+        # MusicCommands クラスのインスタンスをツリーに追加する
         bot.tree.add_command(
-            TicketCommands(name="ticket", description="チケットシステムを管理します。")
+            MusicCommands(name="music", description="音楽再生コマンド")
         )
         
         synced = await bot.tree.sync()
         logging.info(f"スラッシュコマンドを同期しました。登録数: {len(synced)} 件")
-
-        # Botが再起動した際に、過去に送信した永続ビュー（ボタン）をロードする
-        for guild in bot.guilds:
-            if guild.id in TICKET_PANEL_CONFIG:
-                bot.add_view(TicketView(bot, guild.id))
-        
     except Exception as e:
         logging.error(f"スラッシュコマンドの同期中にエラーが発生しました: {e}")
 
+
 @bot.event
 async def on_message(message):
-    """メッセージイベント"""
+    """メッセージイベントはスラッシュコマンド実行に影響を与えないよう、最低限の処理のみ"""
     if message.author.bot:
         return
     await bot.process_commands(message)
 
+
 # ----------------------------------------------------
-# --- スラッシュコマンドの定義 ---
+# --- 🎶 音楽再生コマンドのグループ定義 ---
 # ----------------------------------------------------
 
-# --- 🎫 チケットシステムコマンドのグループ定義 ---
-class TicketCommands(app_commands.Group):
+class MusicCommands(app_commands.Group):
     
-    # このグループ内のコマンドは、サブコマンドで個別に権限チェックを行う
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        # ボイスチャンネルに接続していない場合は、接続を試みる
+        if not interaction.user.voice:
+            await interaction.response.send_message(
+                "❌ 音楽を再生するには、先にボイスチャンネルに接続してください。", 
+                ephemeral=True
+            )
+            return False
         return True
-    
-    @app_commands.command(name="create_panel", description="チケット作成パネルを設定し、現在のチャンネルに表示します。")
-    @app_commands.checks.has_permissions(administrator=True) # 🚨 管理者のみ実行可能
-    async def create_panel(self, interaction: discord.Interaction):
-        # 設定モーダルを表示する
-        await interaction.response.send_modal(TicketSetupModal(bot))
 
-
-# --- 管理コマンド (Fakemessage) ---
-
-@bot.tree.command(name="fakemessage", description="指定ユーザーになりすましてメッセージを送信します (Webhookを使用)。")
-@commands.has_permissions(manage_webhooks=True) # 🚨 Webhookの管理権限を持つユーザーなら誰でも実行可能
-async def fakemessage_slash(interaction: discord.Interaction, user: discord.Member, content: str):
-    await interaction.response.defer(ephemeral=True)
-    channel = interaction.channel
-    webhook = None
-
-    try:
-        webhooks = await channel.webhooks()
-        for wh in webhooks:
-            if wh.name == "Bot Fake Sender":
-                webhook = wh
-                break
+    @app_commands.command(name="play", description="YouTubeから音楽を検索して再生します。")
+    async def play(self, interaction: discord.Interaction, search: str):
+        # 即座に応答
+        await interaction.response.defer(thinking=True)
         
-        if webhook is None:
-            webhook = await channel.create_webhook(name="Bot Fake Sender")
+        # ボイスクライアントを取得
+        vc = interaction.guild.voice_client
 
-        await webhook.send(
-            content=content,
-            username=user.display_name,
-            avatar_url=user.display_avatar.url
-        )
+        # ボイスチャンネルに接続
+        if not vc:
+            try:
+                vc = await interaction.user.voice.channel.connect()
+            except asyncio.TimeoutError:
+                await interaction.followup.send("❌ ボイスチャンネルへの接続がタイムアウトしました。", ephemeral=True)
+                return
+            except discord.Forbidden:
+                await interaction.followup.send("❌ ボイスチャンネルに接続する権限がありません。", ephemeral=True)
+                return
         
-        await interaction.followup.send(f"✅ **{user.display_name}** になりすましたメッセージを送信しました。", ephemeral=True)
+        # 既に再生中の場合は停止
+        if vc.is_playing():
+            vc.stop()
+
+        try:
+            # YTDLSourceからストリーミングソースを作成
+            player = await YTDLSource.from_url(search, loop=bot.loop, stream=True)
+            vc.play(player, after=lambda e: logging.error(f'Player error: {e}') if e else None)
+            
+            await interaction.followup.send(f"▶️ **{player.title}** の再生を開始します！")
+
+        except Exception as e:
+            logging.error(f"音楽再生エラー: {e}")
+            await interaction.followup.send(f"❌ 音楽の検索・再生中にエラーが発生しました: {e}", ephemeral=True)
+
+    @app_commands.command(name="stop", description="現在の再生を停止し、ボイスチャンネルから切断します。")
+    async def stop(self, interaction: discord.Interaction):
+        await interaction.response.defer(thinking=True)
+        vc = interaction.guild.voice_client
         
-    except discord.Forbidden:
-        await interaction.followup.send("❌ BotにWebhookの管理権限がありません。", ephemeral=True)
-    except Exception as e:
-        logging.error(f"Fakemessage実行中にエラーが発生: {e}")
-        await interaction.followup.send("予期せぬエラーが発生し、メッセージを送信できませんでした。", ephemeral=True)
+        if not vc or not vc.is_connected():
+            await interaction.followup.send("⚠️ Botはボイスチャンネルに接続されていません。", ephemeral=True)
+            return
+
+        if vc.is_playing():
+            vc.stop() # 再生を停止
+            
+        await vc.disconnect() # チャンネルから切断
+        await interaction.followup.send("⏹️ 再生を停止し、ボイスチャンネルから切断しました。")
 
 
 # ----------------------------------------------------
@@ -357,10 +192,6 @@ def start_bot():
     else:
         logging.info("Discord Botを起動中...")
         try:
-            if not bot.intents.members or not bot.intents.message_content:
-                 logging.warning("必要なインテント（Members, Message Content）が有効になっていません。Discord Developer Portalで確認してください。")
-            
-            # Gunicornのタイムアウト対策のため、ログレベルをINFOに設定
             bot.run(DISCORD_BOT_TOKEN, log_level=logging.INFO) 
             
         except discord.errors.LoginFailure:
