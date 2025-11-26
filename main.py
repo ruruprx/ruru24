@@ -8,6 +8,7 @@ import logging
 import math
 import time
 import random
+import asyncio
 
 # ログ設定
 logging.basicConfig(level=logging.INFO)
@@ -16,7 +17,7 @@ logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 
 # --- Discord Bot Setup ---
-# 必要なインテントを有効化 (モデレーション、メッセージ内容、メンバー情報など)
+# 必要なインテントを有効化
 intents = discord.Intents.default()
 intents.guilds = True
 intents.members = True 
@@ -37,10 +38,7 @@ except Exception:
 # ----------------------------------------------------
 
 # 翻訳機能が有効なチャンネルを管理する辞書 {channel_id: target_language_code}
-# target_language_codeは、例として 'en' (英語) や 'ja' (日本語) を想定
 ACTIVE_TRANSLATION_CHANNELS = {} 
-# 翻訳機能の実装には外部API (例: Google Cloud Translation API) が必要ですが、
-# ここでは bot.tree.command 内で Google 検索ツールを使用して翻訳をシミュレートします。
 
 
 # ----------------------------------------------------
@@ -50,11 +48,6 @@ ACTIVE_TRANSLATION_CHANNELS = {}
 class Moderation(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-
-    async def cog_check(self, ctx):
-        # すべてのモデレーションコマンドの前に、実行者がモデレーターロールを持っているか確認
-        # スラッシュコマンドでは interaction_check を使用するため、ここではスキップ
-        return True 
 
     # --- Nuke: チャンネル再作成 ---
     @app_commands.command(name="nuke", description="チャンネルを削除し、同じ設定で再作成します。")
@@ -145,18 +138,12 @@ class Moderation(commands.Cog):
 class Utility(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.translation_loop_task = None
 
     # --- FAKE MESSAGE: 偽装メッセージ送信 ---
     @app_commands.command(name="fake_message", description="Botが別のユーザーとしてメッセージを送信します。")
     @app_commands.checks.has_permissions(manage_webhooks=True)
     async def fake_message_command(self, interaction: discord.Interaction, user: discord.Member, content: str):
-        # ユーザーのコマンド投稿を削除
-        try:
-            await interaction.message.delete()
-        except:
-            # スラッシュコマンドなので interaction.message は None。この行はスキップされる。
-            pass
+        # ユーザーのコマンド投稿はスラッシュコマンドなので削除不要
 
         # Webhookを使ってユーザーに成りすまして投稿
         try:
@@ -189,14 +176,12 @@ class Utility(commands.Cog):
         
         # 安全な計算のために eval の代わりに math を使用
         try:
-            # 危険な文字をチェック
-            if any(char in formula for char in 'aAbBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ[{]}"\'`'):
-                raise ValueError("許可されていない文字が含まれています。")
+            # 危険な文字をチェック (evalの使用を避けるため、安全な文字のみに制限)
+            allowed_chars = "0123456789.+-*/() "
+            if any(char not in allowed_chars for char in formula):
+                 raise ValueError("許可されていない文字が含まれています。演算子は + - * / () のみ使用可能です。")
                 
-            # 計算を実行 (Pythonの標準的な計算機能を使用)
-            # **注意: math.sqrtやmath.logなどの高度な関数を使用したい場合は、
-            # 適切なライブラリをインポートし、evalを避けるための安全なパーサーが必要です。
-            # ここでは組み込みの算術演算子のみを許可します。
+            # 計算を実行
             result = eval(formula) 
             
             embed = discord.Embed(
@@ -239,28 +224,30 @@ class Utility(commands.Cog):
             updated_message = await interaction.channel.fetch_message(message.id)
             reaction = utils.get(updated_message.reactions, emoji="🎁")
             
+            participants = []
             if reaction:
                 # Bot自身を除外して参加者を取得
                 participants = [user async for user in reaction.users() if user != self.bot.user]
                 
-                if len(participants) < winners:
-                    await updated_message.reply("⚠️ 参加者が少なすぎたため、ギブアウェイはキャンセルされました。")
-                    return
-                
-                # 勝者を選出
-                winners_list = random.sample(participants, winners)
-                winner_mentions = ", ".join([w.mention for w in winners_list])
-                
-                final_embed = discord.Embed(
-                    title=f"🏆 GIVEAWAY終了: {prize} 🏆",
-                    description=f"勝者は... {winner_mentions} です！おめでとうございます！",
-                    color=discord.Color.green()
-                )
-                await updated_message.reply(content=f"おめでとうございます！{winner_mentions}！", embed=final_embed)
+            if len(participants) < winners:
+                await updated_message.reply(f"⚠️ 参加者が少なかった（{len(participants)}名）ため、ギブアウェイはキャンセルされました。")
+                return
+            
+            # 勝者を選出
+            winners_list = random.sample(participants, winners)
+            winner_mentions = ", ".join([w.mention for w in winners_list])
+            
+            final_embed = discord.Embed(
+                title=f"🏆 GIVEAWAY終了: {prize} 🏆",
+                description=f"勝者は... {winner_mentions} です！おめでとうございます！",
+                color=discord.Color.green()
+            )
+            await updated_message.reply(content=f"おめでとうございます！{winner_mentions}！", embed=final_embed)
             
         except Exception as e:
             logging.error(f"ギブアウェイ抽選中にエラー: {e}")
-            await interaction.channel.send("❌ ギブアウェイの抽選中にエラーが発生しました。", reference=updated_message)
+            # エラーが発生しても、メッセージを削除しないように修正
+            await interaction.channel.send("❌ ギブアウェイの抽選中にエラーが発生しました。", reference=message)
 
 
 # ----------------------------------------------------
@@ -278,24 +265,24 @@ class TranslationAndHelp(commands.Cog):
         
         help_text = (
             "## 🤖 Bot 機能一覧\n\n"
-            "このBotは、モデレーションとユーティリティに特化しています。\n\n"
+            "このBotは、**モデレーション**と**ユーティリティ**に特化しています。\n\n"
             
             "### 🛡️ モデレーションコマンド (Prefix: /)\n"
-            "- **`/nuke`**: チャンネルを即座に再作成し、履歴を消去します。\n"
-            "- **`/ban <@ユーザー> [理由]`**: ユーザーをBANします。\n"
-            "- **`/kick <@ユーザー> [理由]`**: ユーザーをキックします。\n"
-            "- **`/timeout <@ユーザー> <分> [理由]`**: ユーザーを一時的にタイムアウトします。\n\n"
+            "- **`/nuke`**: チャンネルを即座に再作成し、履歴を消去します。*（権限: チャンネル管理）*\n"
+            "- **`/ban <@ユーザー> [理由]`**: ユーザーをBANします。*（権限: メンバーBAN）*\n"
+            "- **`/kick <@ユーザー> [理由]`**: ユーザーをキックします。*（権限: メンバーKick）*\n"
+            "- **`/timeout <@ユーザー> <分> [理由]`**: ユーザーを一時的にタイムアウトします。*（権限: メンバー管理）*\n\n"
             
             "### 💡 ユーティリティコマンド (Prefix: /)\n"
-            "- **`/fake_message <@ユーザー> <メッセージ>`**: 指定したユーザーになりすましてメッセージを送信します。(Webhook利用)\n"
-            "- **`/calc <数式>`**: 数式を計算します。\n"
-            "- **`/giveaway <分> <勝者数> <景品>`**: ギブアウェイを開始します。\n"
-            "- **`/help`**: このヘルプを表示します。\n\n"
+            "- **`/fake_message <@ユーザー> <メッセージ>`**: 指定したユーザーになりすましてメッセージを送信します。*（権限: Webhook管理）*\n"
+            "- **`/calc <数式>`**: 簡単な数式を計算します。\n"
+            "- **`/giveaway <分> <勝者数> <景品>`**: ギブアウェイを開始します。*（権限: サーバー管理）*\n\n"
             
             "### 🌍 翻訳機能 (Prefix: /)\n"
-            "- **`/翻訳 [言語コード]`**: そのチャンネルでの自動翻訳機能を切り替えます。言語コードがない場合は英語(`en`)に設定します。\n"
-            "  - 例: `/翻訳 en` (日本語を英語に翻訳) \n"
-            "  - 例: `/翻訳 off` (翻訳機能を解除) \n"
+            "- **`/翻訳 [言語コード]`**: そのチャンネルでの**自動翻訳機能**を切り替えます。\n"
+            "  - 例: `/翻訳 en` (メッセージを英語に翻訳)\n"
+            "  - 例: `/翻訳 off` (翻訳機能を解除)\n"
+            "  - ⚠️ **注意**: 翻訳機能は外部API（Google Translateなど）の連携が必要です。APIキーが未設定の場合、動作しません。\n"
         )
         
         embed = discord.Embed(
@@ -320,13 +307,13 @@ class TranslationAndHelp(commands.Cog):
             else:
                 await interaction.followup.send("⚠️ このチャンネルでは自動翻訳機能は有効になっていません。", ephemeral=True)
         else:
-            # 言語コードの簡単なチェック (例: 'en', 'ja', 'es')
+            # 言語コードの簡単なチェック
             if len(target_language) != 2 or not target_language.isalpha():
                 await interaction.followup.send("❌ 無効な言語コードです。例: `en`, `ja`, `off` を使用してください。", ephemeral=True)
                 return
 
             ACTIVE_TRANSLATION_CHANNELS[channel_id] = target_language
-            await interaction.followup.send(f"✅ このチャンネルの**自動翻訳機能を有効**にしました。\n送信されたメッセージは `{target_language.upper()}` に翻訳されます。", ephemeral=False)
+            await interaction.followup.send(f"✅ このチャンネルの**自動翻訳機能を有効**にしました。\n送信されたメッセージは `{target_language.upper()}` に翻訳されます。\n⚠️ **注意**: 翻訳機能を利用するには、Botの実行環境で適切な**外部翻訳APIキーの設定**が必要です。", ephemeral=False)
 
 
 # ----------------------------------------------------
@@ -364,35 +351,18 @@ async def on_message(message):
     # 自動翻訳が有効なチャンネルであるかチェック
     if message.channel.id in ACTIVE_TRANSLATION_CHANNELS:
         target_lang = ACTIVE_TRANSLATION_CHANNELS[message.channel.id]
-        original_content = message.content
         
-        # ⚠️ 翻訳APIの代替としてGoogle Searchツールを使用します ⚠️
-        # 実際の運用では、Google Cloud Translation APIなどの外部サービスが必要です。
-        translation_query = f"'{original_content}' を {target_lang} に翻訳"
-        
+        # 翻訳APIの代替ロジックに置き換え
+        # 実際の運用では、ここに外部翻訳APIの呼び出しコードが入ります。
         try:
-            # Google Search APIを呼び出す
-            google_search_result = await google.search(queries=[translation_query])
-            
-            # 検索結果から翻訳されたテキストを抽出するロジック（Botの内部ロジックに依存）
-            # ここでは、ツールの出力をそのまま翻訳結果として使用すると仮定します。
-            # 実際の翻訳結果は検索スニペットの最初の結果になることが多いです。
-            translated_text = "翻訳結果が見つかりませんでした。" 
-            if google_search_result and google_search_result.get('result'):
-                # 検索結果を整形し、最初のスニペットを翻訳として利用
-                # (この部分は実行環境によって異なるため、一般的な処理を記述)
-                translated_text = google_search_result['result'][:500] # 500文字に制限
-                # ユーザーが理解しやすいように、検索結果の最初の部分を使用
-            
-            # 翻訳結果をチャンネルに送信
             await message.channel.send(
                 f"**[{target_lang.upper()}への翻訳]** {message.author.mention}: \n"
-                f"```{translated_text}```"
+                f"⚠️ **外部APIキーが未設定**のため、翻訳機能は利用できません。正確な翻訳には、専用の翻訳API連携が必要です。",
+                delete_after=30 # 30秒後にメッセージを自動削除
             )
             
         except Exception as e:
-            logging.error(f"翻訳中にGoogle Searchツールエラー: {e}")
-            await message.channel.send("❌ 翻訳サービスの呼び出し中にエラーが発生しました。", delete_after=10)
+            logging.error(f"翻訳通知中にエラー: {e}")
 
     # コマンドの処理を続ける
     await bot.process_commands(message)
@@ -410,7 +380,8 @@ def start_bot():
     else:
         logging.info("Discord Botを起動中...")
         try:
-            bot.run(DISCORD_BOT_TOKEN, log_level=logging.INFO) 
+            # log_handlerを無効にして、大量のログ出力を防ぐ
+            bot.run(DISCORD_BOT_TOKEN, log_handler=None) 
             
         except discord.errors.LoginFailure:
             logging.error("ログイン失敗: Discord Bot Tokenが無効です。")
