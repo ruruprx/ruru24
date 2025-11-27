@@ -9,17 +9,16 @@ import math
 import time
 import random
 import asyncio
-# --- 変更点 ---
+# Groq APIを使用
 from groq import Groq, APIError 
-# --------------
 
 # ログ設定
 logging.basicConfig(level=logging.INFO)
 
-# --- 🚨 KeepAlive用: Flaskアプリの定義 ---
+# KeepAlive用: Flaskアプリの定義
 app = Flask(__name__)
 
-# --- Discord Bot Setup ---
+# Discord Bot Setup
 intents = discord.Intents.default()
 intents.guilds = True
 intents.members = True 
@@ -30,7 +29,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # 環境変数からの設定
 try:
     DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN") 
-    # 🚨 キー名を GROQ_API_KEY に変更
     GROQ_API_KEY = os.environ.get("GROQ_API_KEY") 
     
     if not DISCORD_BOT_TOKEN:
@@ -38,7 +36,6 @@ try:
     
     # Groqクライアントの初期化
     if GROQ_API_KEY:
-        # ⚠️ Groqクライアントの初期化
         ai_client = Groq(api_key=GROQ_API_KEY)
         logging.info("Groq Client initialized.")
     else:
@@ -310,7 +307,7 @@ class TranslationAndHelp(commands.Cog):
                 await interaction.followup.send("⚠️ このチャンネルでは自動翻訳機能は有効になっていません。", ephemeral=True)
         else:
             if not ai_client:
-                # 🚨 Groq APIキーが未設定の場合
+                # Groq APIキーが未設定の場合
                 await interaction.followup.send("❌ Groq APIキーが設定されていません。翻訳機能は利用できません。", ephemeral=False)
                 return
 
@@ -363,29 +360,49 @@ async def on_message(message):
             return
 
         try:
-            # 💡 Groq API (llama3-8b-8192) を使用
-            response = await asyncio.to_thread(
-                ai_client.chat.completions.create,
-                model="llama3-8b-8192", # 高速なオープンソースモデル
-                messages=[
-                    {"role": "system", "content": f"あなたは優秀な翻訳家です。ユーザーのメッセージを'{target_lang}'にのみ翻訳してください。翻訳結果以外の情報は一切含めないでください。"},
-                    {"role": "user", "content": message.content}
-                ],
-                temperature=0.1 # 翻訳なので低めに設定
-            )
+            # 💡 最大3回試行するループを設定 (レート制限対策)
+            translated_text = None
+            for attempt in range(3):
+                try:
+                    # Groq API (llama3-8b-8192) を使用
+                    response = await asyncio.to_thread(
+                        ai_client.chat.completions.create,
+                        model="llama3-8b-8192", # 高速なオープンソースモデル
+                        messages=[
+                            {"role": "system", "content": f"あなたは優秀な翻訳家です。ユーザーのメッセージを'{target_lang}'にのみ翻訳してください。翻訳結果以外の情報は一切含めないでください。"},
+                            {"role": "user", "content": message.content}
+                        ],
+                        temperature=0.1 # 翻訳なので低めに設定
+                    )
+                    
+                    # 成功したら翻訳テキストを取得してループを抜ける
+                    translated_text = response.choices[0].message.content.strip()
+                    break 
+
+                except APIError as e:
+                    # レート制限エラー（Status 429）の場合をチェック
+                    if 'rate limit' in str(e).lower() or '429' in str(e):
+                        logging.warning(f"Groq: レート制限に遭遇しました。5秒待機して再試行します (試行回数: {attempt + 1})")
+                        if attempt < 2:
+                            await asyncio.sleep(5) # 5秒待機
+                        else:
+                            # 3回失敗したらエラーを再送出
+                            raise # 最終的な except APIError へ処理を移す
+                    else:
+                        # 他のAPIエラーの場合は即座に処理を中断
+                        raise
             
-            translated_text = response.choices[0].message.content.strip()
-            
-            # 翻訳結果をチャンネルに送信
-            await message.channel.send(
-                f"**[{target_lang.upper()}への翻訳 (Groq)]** {message.author.mention}: \n"
-                f"```{translated_text}```"
-            )
+            # 翻訳が成功した場合のみメッセージを送信
+            if translated_text:
+                await message.channel.send(
+                    f"**[{target_lang.upper()}への翻訳 (Groq)]** {message.author.mention}: \n"
+                    f"```{translated_text}```"
+                )
             
         except APIError as e:
-            # Groq APIエラーの詳細（無料枠のレート制限など）を表示
+            # 最終的なAPIエラーメッセージ
             logging.error(f"Groq APIエラー: {e}")
-            await message.channel.send(f"❌ 翻訳中にGroq APIエラーが発生しました。無料枠のレート制限を確認してください。", delete_after=15)
+            await message.channel.send(f"❌ 翻訳中にGroq APIエラーが発生しました。無料枠のレート制限をオーバーしました。しばらく待ってから再度お試しください。", delete_after=15)
         except Exception as e:
             logging.error(f"翻訳中に予期せぬエラー: {e}")
             await message.channel.send(f"❌ 翻訳中に予期せぬエラーが発生しました。", delete_after=15)
@@ -406,6 +423,7 @@ def start_bot():
     else:
         logging.info("Discord Botを起動中...")
         try:
+            # log_handler=None に設定し、ロギングをthreadingに依存させないようにする
             bot.run(DISCORD_BOT_TOKEN, log_handler=None) 
             
         except discord.errors.LoginFailure:
@@ -428,3 +446,4 @@ def home():
 def keep_alive_endpoint():
     """UptimeRobotからのヘルスチェックに応答するエンドポイント"""
     return jsonify({"message": "Alive"}), 200
+
