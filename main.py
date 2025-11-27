@@ -10,8 +10,7 @@ import time
 import random
 import asyncio
 # --- 変更点 ---
-import openai
-from openai import OpenAI, APIError
+from groq import Groq, APIError 
 # --------------
 
 # ログ設定
@@ -31,23 +30,24 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # 環境変数からの設定
 try:
     DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN") 
-    OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") # 🚨 新しいAPIキー
+    # 🚨 キー名を GROQ_API_KEY に変更
+    GROQ_API_KEY = os.environ.get("GROQ_API_KEY") 
     
     if not DISCORD_BOT_TOKEN:
         logging.error("致命的なエラー: 'DISCORD_BOT_TOKEN' が設定されていません。")
     
-    # OpenAIクライアントの初期化
-    if OPENAI_API_KEY:
-        # ⚠️ 最新のライブラリでは、APIキーはここで渡すか環境変数から自動で読み込まれます。
-        openai_client = OpenAI(api_key=OPENAI_API_KEY)
-        logging.info("OpenAI Client initialized.")
+    # Groqクライアントの初期化
+    if GROQ_API_KEY:
+        # ⚠️ Groqクライアントの初期化
+        ai_client = Groq(api_key=GROQ_API_KEY)
+        logging.info("Groq Client initialized.")
     else:
-        openai_client = None
-        logging.warning("OPENAI_API_KEY not found. Translation feature will be disabled.")
+        ai_client = None
+        logging.warning("GROQ_API_KEY not found. Translation feature will be disabled.")
 
 except Exception as e:
     DISCORD_BOT_TOKEN = None
-    openai_client = None
+    ai_client = None
     logging.error(f"初期設定中にエラー: {e}")
 
 
@@ -284,7 +284,7 @@ class TranslationAndHelp(commands.Cog):
             "- **`/翻訳 [言語コード]`**: そのチャンネルでの**自動翻訳機能**を切り替えます。\n"
             "  - 例: `/翻訳 en` (メッセージを英語に翻訳)\n"
             "  - 例: `/翻訳 off` (翻訳機能を解除)\n"
-            "  - 💡 **注意**: 翻訳には**ChatGPT (OpenAI) API**を使用します。\n"
+            "  - 💡 **注意**: 翻訳には**Groq (Llama 3) API**を使用します。\n"
         )
         
         embed = discord.Embed(
@@ -309,16 +309,17 @@ class TranslationAndHelp(commands.Cog):
             else:
                 await interaction.followup.send("⚠️ このチャンネルでは自動翻訳機能は有効になっていません。", ephemeral=True)
         else:
-            if not openai_client:
-                await interaction.followup.send("❌ OpenAI APIキーが設定されていません。翻訳機能は利用できません。", ephemeral=False)
+            if not ai_client:
+                # 🚨 Groq APIキーが未設定の場合
+                await interaction.followup.send("❌ Groq APIキーが設定されていません。翻訳機能は利用できません。", ephemeral=False)
                 return
 
             ACTIVE_TRANSLATION_CHANNELS[channel_id] = target_language
-            await interaction.followup.send(f"✅ このチャンネルの**自動翻訳機能を有効**にしました。\n送信されたメッセージは `{target_language.upper()}` に翻訳されます。\n💡 **翻訳にはChatGPTを使用します。**", ephemeral=False)
+            await interaction.followup.send(f"✅ このチャンネルの**自動翻訳機能を有効**にしました。\n送信されたメッセージは `{target_language.upper()}` に翻訳されます。\n💡 **翻訳にはGroq (Llama 3) を使用します。**", ephemeral=False)
 
 
 # ----------------------------------------------------
-# --- Discord イベント & 翻訳ロジック (OpenAI使用) ---
+# --- Discord イベント & 翻訳ロジック (Groq使用) ---
 # ----------------------------------------------------
 
 @bot.event
@@ -352,20 +353,20 @@ async def on_message(message):
     if message.channel.id in ACTIVE_TRANSLATION_CHANNELS:
         target_lang = ACTIVE_TRANSLATION_CHANNELS[message.channel.id]
         
-        if not openai_client:
+        if not ai_client:
             await message.channel.send(
                 f"**[{target_lang.upper()}への翻訳]** {message.author.mention}: \n"
-                f"⚠️ **OpenAI APIキーが未設定**のため、翻訳は実行できません。",
+                f"⚠️ **Groq APIキーが未設定**のため、翻訳は実行できません。",
                 delete_after=20
             )
             await bot.process_commands(message)
             return
 
         try:
-            # 💡 ユーザーの要求に従い gpt-4o モデルと最新のAPI形式を使用
+            # 💡 Groq API (llama3-8b-8192) を使用
             response = await asyncio.to_thread(
-                openai_client.chat.completions.create,
-                model="gpt-4o", # ユーザーの指定モデル
+                ai_client.chat.completions.create,
+                model="llama3-8b-8192", # 高速なオープンソースモデル
                 messages=[
                     {"role": "system", "content": f"あなたは優秀な翻訳家です。ユーザーのメッセージを'{target_lang}'にのみ翻訳してください。翻訳結果以外の情報は一切含めないでください。"},
                     {"role": "user", "content": message.content}
@@ -373,21 +374,18 @@ async def on_message(message):
                 temperature=0.1 # 翻訳なので低めに設定
             )
             
-            # 💡 最新のレスポンスからコンテンツを取得
             translated_text = response.choices[0].message.content.strip()
             
             # 翻訳結果をチャンネルに送信
             await message.channel.send(
-                f"**[{target_lang.upper()}への翻訳]** {message.author.mention}: \n"
+                f"**[{target_lang.upper()}への翻訳 (Groq)]** {message.author.mention}: \n"
                 f"```{translated_text}```"
             )
             
-        except openai.AuthenticationError:
-            await message.channel.send(f"❌ OpenAI APIキーの認証に失敗しました。キーを確認してください。", delete_after=15)
         except APIError as e:
-            # APIエラーの詳細（例：クレジット不足、レート制限）を表示
-            logging.error(f"OpenAI APIエラー: {e}")
-            await message.channel.send(f"❌ 翻訳中にAPIエラーが発生しました。クレジット残高またはキーの状態を確認してください。", delete_after=15)
+            # Groq APIエラーの詳細（無料枠のレート制限など）を表示
+            logging.error(f"Groq APIエラー: {e}")
+            await message.channel.send(f"❌ 翻訳中にGroq APIエラーが発生しました。無料枠のレート制限を確認してください。", delete_after=15)
         except Exception as e:
             logging.error(f"翻訳中に予期せぬエラー: {e}")
             await message.channel.send(f"❌ 翻訳中に予期せぬエラーが発生しました。", delete_after=15)
