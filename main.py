@@ -11,7 +11,7 @@ import random
 import asyncio
 # --- 変更点 ---
 import openai
-from openai import OpenAI
+from openai import OpenAI, APIError
 # --------------
 
 # ログ設定
@@ -38,11 +38,12 @@ try:
     
     # OpenAIクライアントの初期化
     if OPENAI_API_KEY:
+        # ⚠️ 最新のライブラリでは、APIキーはここで渡すか環境変数から自動で読み込まれます。
         openai_client = OpenAI(api_key=OPENAI_API_KEY)
         logging.info("OpenAI Client initialized.")
     else:
         openai_client = None
-        logging.warning("OPENAI_API_KEY not found. Translation feature will be limited.")
+        logging.warning("OPENAI_API_KEY not found. Translation feature will be disabled.")
 
 except Exception as e:
     DISCORD_BOT_TOKEN = None
@@ -55,7 +56,6 @@ except Exception as e:
 # ----------------------------------------------------
 
 # 翻訳機能が有効なチャンネルを管理する辞書 {channel_id: target_language_code}
-# 例: {123456789: 'en'}
 ACTIVE_TRANSLATION_CHANNELS = {} 
 
 
@@ -189,6 +189,7 @@ class Utility(commands.Cog):
                  raise ValueError("許可されていない文字が含まれています。演算子は + - * / () のみ使用可能です。")
                 
             # 計算を実行
+            # evalの使用はセキュリティリスクを伴いますが、許可された文字のみに制限しています
             result = eval(formula) 
             
             embed = discord.Embed(
@@ -361,17 +362,18 @@ async def on_message(message):
             return
 
         try:
-            # 翻訳を非同期で実行
+            # 💡 ユーザーの要求に従い gpt-4o モデルと最新のAPI形式を使用
             response = await asyncio.to_thread(
                 openai_client.chat.completions.create,
-                model="gpt-3.5-turbo", # 翻訳に適した高速モデル
+                model="gpt-4o", # ユーザーの指定モデル
                 messages=[
                     {"role": "system", "content": f"あなたは優秀な翻訳家です。ユーザーのメッセージを'{target_lang}'にのみ翻訳してください。翻訳結果以外の情報は一切含めないでください。"},
                     {"role": "user", "content": message.content}
                 ],
-                temperature=0.0
+                temperature=0.1 # 翻訳なので低めに設定
             )
             
+            # 💡 最新のレスポンスからコンテンツを取得
             translated_text = response.choices[0].message.content.strip()
             
             # 翻訳結果をチャンネルに送信
@@ -382,12 +384,13 @@ async def on_message(message):
             
         except openai.AuthenticationError:
             await message.channel.send(f"❌ OpenAI APIキーの認証に失敗しました。キーを確認してください。", delete_after=15)
-        except openai.APIError as e:
+        except APIError as e:
+            # APIエラーの詳細（例：クレジット不足、レート制限）を表示
             logging.error(f"OpenAI APIエラー: {e}")
-            await message.channel.send(f"❌ 翻訳中にAPIエラーが発生しました。", delete_after=15)
+            await message.channel.send(f"❌ 翻訳中にAPIエラーが発生しました。クレジット残高またはキーの状態を確認してください。", delete_after=15)
         except Exception as e:
             logging.error(f"翻訳中に予期せぬエラー: {e}")
-            await message.channel.send(f"❌ 翻訳中にエラーが発生しました。", delete_after=15)
+            await message.channel.send(f"❌ 翻訳中に予期せぬエラーが発生しました。", delete_after=15)
 
     # コマンドの処理を続ける
     await bot.process_commands(message)
