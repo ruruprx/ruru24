@@ -9,6 +9,10 @@ import math
 import time
 import random
 import asyncio
+# --- 変更点 ---
+import openai
+from openai import OpenAI
+# --------------
 
 # ログ設定
 logging.basicConfig(level=logging.INFO)
@@ -17,7 +21,6 @@ logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 
 # --- Discord Bot Setup ---
-# 必要なインテントを有効化
 intents = discord.Intents.default()
 intents.guilds = True
 intents.members = True 
@@ -28,16 +31,31 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # 環境変数からの設定
 try:
     DISCORD_BOT_TOKEN = os.environ.get("DISCORD_BOT_TOKEN") 
+    OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") # 🚨 新しいAPIキー
+    
     if not DISCORD_BOT_TOKEN:
         logging.error("致命的なエラー: 'DISCORD_BOT_TOKEN' が設定されていません。")
-except Exception:
+    
+    # OpenAIクライアントの初期化
+    if OPENAI_API_KEY:
+        openai_client = OpenAI(api_key=OPENAI_API_KEY)
+        logging.info("OpenAI Client initialized.")
+    else:
+        openai_client = None
+        logging.warning("OPENAI_API_KEY not found. Translation feature will be limited.")
+
+except Exception as e:
     DISCORD_BOT_TOKEN = None
+    openai_client = None
+    logging.error(f"初期設定中にエラー: {e}")
+
 
 # ----------------------------------------------------
 # --- ⚙️ グローバルな設定・状態管理 ---
 # ----------------------------------------------------
 
 # 翻訳機能が有効なチャンネルを管理する辞書 {channel_id: target_language_code}
+# 例: {123456789: 'en'}
 ACTIVE_TRANSLATION_CHANNELS = {} 
 
 
@@ -56,20 +74,14 @@ class Moderation(commands.Cog):
         await interaction.response.defer(thinking=True, ephemeral=True)
         channel = interaction.channel
         
-        # チャンネルのすべての設定と位置を保持
         position = channel.position
         category = channel.category
         
-        # チャンネルをクローン
         new_channel = await channel.clone()
-        
-        # 古いチャンネルを削除
         await channel.delete()
         
-        # 新しいチャンネルを設定
         await new_channel.edit(position=position, category=category)
         
-        # ユーザーに通知
         await interaction.followup.send(
             f"✅ チャンネル **#{new_channel.name}** を核爆弾で吹き飛ばし、再構築しました。",
             ephemeral=False
@@ -143,15 +155,12 @@ class Utility(commands.Cog):
     @app_commands.command(name="fake_message", description="Botが別のユーザーとしてメッセージを送信します。")
     @app_commands.checks.has_permissions(manage_webhooks=True)
     async def fake_message_command(self, interaction: discord.Interaction, user: discord.Member, content: str):
-        # ユーザーのコマンド投稿はスラッシュコマンドなので削除不要
-
+        
         # Webhookを使ってユーザーに成りすまして投稿
         try:
-            # チャンネルの既存Webhookを検索
             webhooks = await interaction.channel.webhooks()
             webhook = utils.get(webhooks, name="FakeMessageHook")
             
-            # Webhookが存在しない場合は作成
             if webhook is None:
                 webhook = await interaction.channel.create_webhook(name="FakeMessageHook")
                 
@@ -161,7 +170,6 @@ class Utility(commands.Cog):
                 avatar_url=user.display_avatar.url
             )
             
-            # コマンド実行者に応答 (非表示)
             await interaction.response.send_message("✅ メッセージを偽装送信しました。", ephemeral=True)
 
         except discord.Forbidden:
@@ -174,9 +182,8 @@ class Utility(commands.Cog):
     async def calc_command(self, interaction: discord.Interaction, formula: str):
         await interaction.response.defer(thinking=True)
         
-        # 安全な計算のために eval の代わりに math を使用
         try:
-            # 危険な文字をチェック (evalの使用を避けるため、安全な文字のみに制限)
+            # 危険な文字をチェック
             allowed_chars = "0123456789.+-*/() "
             if any(char not in allowed_chars for char in formula):
                  raise ValueError("許可されていない文字が含まれています。演算子は + - * / () のみ使用可能です。")
@@ -215,25 +222,20 @@ class Utility(commands.Cog):
 
         await interaction.followup.send("✅ ギブアウェイを開始しました！", ephemeral=True)
         
-        # ギブアウェイ終了を待機
         await asyncio.sleep(duration)
         
-        # リアクションを取得し、参加者リストを作成
         try:
-            # 更新されたメッセージを取得
             updated_message = await interaction.channel.fetch_message(message.id)
             reaction = utils.get(updated_message.reactions, emoji="🎁")
             
             participants = []
             if reaction:
-                # Bot自身を除外して参加者を取得
                 participants = [user async for user in reaction.users() if user != self.bot.user]
                 
             if len(participants) < winners:
                 await updated_message.reply(f"⚠️ 参加者が少なかった（{len(participants)}名）ため、ギブアウェイはキャンセルされました。")
                 return
             
-            # 勝者を選出
             winners_list = random.sample(participants, winners)
             winner_mentions = ", ".join([w.mention for w in winners_list])
             
@@ -246,7 +248,6 @@ class Utility(commands.Cog):
             
         except Exception as e:
             logging.error(f"ギブアウェイ抽選中にエラー: {e}")
-            # エラーが発生しても、メッセージを削除しないように修正
             await interaction.channel.send("❌ ギブアウェイの抽選中にエラーが発生しました。", reference=message)
 
 
@@ -282,7 +283,7 @@ class TranslationAndHelp(commands.Cog):
             "- **`/翻訳 [言語コード]`**: そのチャンネルでの**自動翻訳機能**を切り替えます。\n"
             "  - 例: `/翻訳 en` (メッセージを英語に翻訳)\n"
             "  - 例: `/翻訳 off` (翻訳機能を解除)\n"
-            "  - ⚠️ **注意**: 翻訳機能は外部API（Google Translateなど）の連携が必要です。APIキーが未設定の場合、動作しません。\n"
+            "  - 💡 **注意**: 翻訳には**ChatGPT (OpenAI) API**を使用します。\n"
         )
         
         embed = discord.Embed(
@@ -307,17 +308,16 @@ class TranslationAndHelp(commands.Cog):
             else:
                 await interaction.followup.send("⚠️ このチャンネルでは自動翻訳機能は有効になっていません。", ephemeral=True)
         else:
-            # 言語コードの簡単なチェック
-            if len(target_language) != 2 or not target_language.isalpha():
-                await interaction.followup.send("❌ 無効な言語コードです。例: `en`, `ja`, `off` を使用してください。", ephemeral=True)
+            if not openai_client:
+                await interaction.followup.send("❌ OpenAI APIキーが設定されていません。翻訳機能は利用できません。", ephemeral=False)
                 return
 
             ACTIVE_TRANSLATION_CHANNELS[channel_id] = target_language
-            await interaction.followup.send(f"✅ このチャンネルの**自動翻訳機能を有効**にしました。\n送信されたメッセージは `{target_language.upper()}` に翻訳されます。\n⚠️ **注意**: 翻訳機能を利用するには、Botの実行環境で適切な**外部翻訳APIキーの設定**が必要です。", ephemeral=False)
+            await interaction.followup.send(f"✅ このチャンネルの**自動翻訳機能を有効**にしました。\n送信されたメッセージは `{target_language.upper()}` に翻訳されます。\n💡 **翻訳にはChatGPTを使用します。**", ephemeral=False)
 
 
 # ----------------------------------------------------
-# --- Discord イベント & 翻訳ロジック ---
+# --- Discord イベント & 翻訳ロジック (OpenAI使用) ---
 # ----------------------------------------------------
 
 @bot.event
@@ -345,24 +345,49 @@ async def on_ready():
 @bot.event
 async def on_message(message):
     """メッセージイベント (翻訳機能の実行場所)"""
-    if message.author.bot:
+    if message.author.bot or message.content.startswith('/'): # スラッシュコマンドは無視
         return
         
-    # 自動翻訳が有効なチャンネルであるかチェック
     if message.channel.id in ACTIVE_TRANSLATION_CHANNELS:
         target_lang = ACTIVE_TRANSLATION_CHANNELS[message.channel.id]
         
-        # 翻訳APIの代替ロジックに置き換え
-        # 実際の運用では、ここに外部翻訳APIの呼び出しコードが入ります。
-        try:
+        if not openai_client:
             await message.channel.send(
                 f"**[{target_lang.upper()}への翻訳]** {message.author.mention}: \n"
-                f"⚠️ **外部APIキーが未設定**のため、翻訳機能は利用できません。正確な翻訳には、専用の翻訳API連携が必要です。",
-                delete_after=30 # 30秒後にメッセージを自動削除
+                f"⚠️ **OpenAI APIキーが未設定**のため、翻訳は実行できません。",
+                delete_after=20
+            )
+            await bot.process_commands(message)
+            return
+
+        try:
+            # 翻訳を非同期で実行
+            response = await asyncio.to_thread(
+                openai_client.chat.completions.create,
+                model="gpt-3.5-turbo", # 翻訳に適した高速モデル
+                messages=[
+                    {"role": "system", "content": f"あなたは優秀な翻訳家です。ユーザーのメッセージを'{target_lang}'にのみ翻訳してください。翻訳結果以外の情報は一切含めないでください。"},
+                    {"role": "user", "content": message.content}
+                ],
+                temperature=0.0
             )
             
+            translated_text = response.choices[0].message.content.strip()
+            
+            # 翻訳結果をチャンネルに送信
+            await message.channel.send(
+                f"**[{target_lang.upper()}への翻訳]** {message.author.mention}: \n"
+                f"```{translated_text}```"
+            )
+            
+        except openai.AuthenticationError:
+            await message.channel.send(f"❌ OpenAI APIキーの認証に失敗しました。キーを確認してください。", delete_after=15)
+        except openai.APIError as e:
+            logging.error(f"OpenAI APIエラー: {e}")
+            await message.channel.send(f"❌ 翻訳中にAPIエラーが発生しました。", delete_after=15)
         except Exception as e:
-            logging.error(f"翻訳通知中にエラー: {e}")
+            logging.error(f"翻訳中に予期せぬエラー: {e}")
+            await message.channel.send(f"❌ 翻訳中にエラーが発生しました。", delete_after=15)
 
     # コマンドの処理を続ける
     await bot.process_commands(message)
@@ -380,7 +405,6 @@ def start_bot():
     else:
         logging.info("Discord Botを起動中...")
         try:
-            # log_handlerを無効にして、大量のログ出力を防ぐ
             bot.run(DISCORD_BOT_TOKEN, log_handler=None) 
             
         except discord.errors.LoginFailure:
