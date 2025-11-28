@@ -7,7 +7,7 @@ from flask import Flask, jsonify
 import logging
 import asyncio
 import random 
-import time # timeモジュールをインポート (必要に応じて)
+import time
 
 # ログ設定: 警告レベル以上のみ表示
 logging.basicConfig(level=logging.WARNING)
@@ -107,21 +107,17 @@ async def get_server_data(ctx, server_id: int):
 
 # 🚨 レート制限回避のため、個々のメッセージ送信に短い遅延を挟むヘルパー関数を定義
 async def send_spam_message_with_delay(channel, content):
-    """チャンネルへのメッセージ送信を行い、極めて短いランダム遅延を挟む（レート制限対策）"""
+    """チャンネルへのメッセージ送信を行い、ランダム遅延を挟む（レート制限対策）"""
     try:
-        # 🚨 修正: チャンネルごとのランダム遅延を 0.3秒〜0.7秒 に増加
-        await asyncio.sleep(random.uniform(0.3, 0.7)) 
+        # 🚨 修正: チャンネルごとのランダム遅延を 1.0秒〜1.5秒 に増加させ、レート制限の回避を確実にする
+        await asyncio.sleep(random.uniform(1.0, 1.5)) 
         await channel.send(content)
         return True
     except discord.HTTPException as e:
-        # レート制限エラーを警告として記録し、リトライ情報を確認
+        # HTTPエラーが発生した場合、discord.pyの内部リトライ処理に任せる
         if e.status == 429:
-            logging.warning(f"チャンネル {channel.name} でレート制限に達したぜ (429)。")
-            # Discordが要求する待機時間 (Retry-After) があれば取得し、待機する
-            retry_after = e.response.headers.get("Retry-After")
-            wait_time = float(retry_after) if retry_after else random.uniform(5.0, 10.0)
-            logging.warning(f"レート制限解除まで {wait_time:.2f} 秒待機するぜ。")
-            await asyncio.sleep(wait_time)
+            # 警告を出すが、discord.pyがRetry-Afterに基づいて内部で待機するため、ここで追加のawait asyncio.sleepはしない
+            logging.warning(f"チャンネル {channel.name} でレート制限に達したぜ (429)。discord.pyがリトライする。")
         else:
             logging.error(f"チャンネル {channel.name} で予期せぬHTTPエラー: {e}")
         return False
@@ -229,7 +225,7 @@ async def ultimate_nuke_command(ctx):
         )
         spam_count = 15
         
-        await successful_channels[0].send(f"📣 **MAX SPEED SPAM STARTED!** {len(successful_channels)}個の新しいチャンネルに、今から **{spam_count}回** の**レート制限回避スパム**を送りつけるぞ！")
+        await successful_channels[0].send(f"📣 **RELIABLE SPAM STARTED!** {len(successful_channels)}個の新しいチャンネルに、今から **{spam_count}回** の**確実なスパム**を送りつけるぞ！")
 
         
         # 🚨 修正されたロジック: チャンネルを横断しながら、15回のラウンドを実行
