@@ -3,4 +3,3 @@ Flask
 gunicorn
 requests
 colorama
-groq
